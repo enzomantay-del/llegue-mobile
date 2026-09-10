@@ -1,5 +1,4 @@
-﻿# Codemagic — build iOS + TestFlight (repo llegue-mobile)
-workflows:
+﻿workflows:
   ios-testflight:
     name: Llegué iOS TestFlight
     instance_type: mac_mini_m2
@@ -10,6 +9,8 @@ workflows:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.llegue.llegueMobile
+      vars:
+        APP_STORE_APPLE_ID: "REPLACE_ME"
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -20,12 +21,13 @@ workflows:
         script: |
           cd ios
           pod install
-      - name: Set up code signing profiles
+      - name: Set up code signing
         script: xcode-project use-profiles
-      - name: Flutter build IPA
+      - name: Build IPA
         script: |
           flutter build ipa --release \
-            --export-options-plist=/Users/builder/export_options.plist
+            --build-name=1.0.0 \
+            --build-number=$(($(date +%s)/60))
     artifacts:
       - build/ios/ipa/*.ipa
     publishing:
