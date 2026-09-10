@@ -1,0 +1,69 @@
+PROBAR LLEGUE EN IPHONE
+=======================
+
+Importante
+----------
+En iPhone NO se puede instalar un .apk como en Android.
+Apple exige:
+  1) Cuenta Apple Developer (pago anual, ~USD 99)
+  2) Compilar la app en una Mac (o Codemagic en la nube)
+  3) Distribuir por TestFlight (app gratis de Apple)
+
+Desde tu PC Windows NO se genera la app de iPhone.
+Ya dejamos el proyecto iOS preparado (Podfile, permisos, Codemagic).
+
+--------------------------------
+PASO A — Cuenta Apple Developer
+--------------------------------
+1) Entrá a https://developer.apple.com/programs/enroll/
+2) Inscribite con tu Apple ID (el proceso puede demorar horas o 1–2 días).
+3) Cuando esté activa, entrá a https://appstoreconnect.apple.com
+4) Mis apps → + → Nueva app:
+   - Plataforma: iOS
+   - Nombre: Llegué
+   - Idioma: Español
+   - Bundle ID: com.llegue.llegueMobile
+     (si no aparece, crealo en Certificates, Identifiers & Profiles
+      → Identifiers → App IDs → com.llegue.llegueMobile)
+   - SKU: llegue001
+
+--------------------------------
+PASO B — Codemagic (compila en la nube, sin Mac)
+--------------------------------
+1) Creá cuenta en https://codemagic.io (podés entrar con GitHub)
+2) Conectá el repo del móvil (cuando esté en GitHub: llegue-mobile
+   o el monorepo llegue-v2). El archivo codemagic.yaml ya está en
+   D:\Documents\Prueba de Cursor\llegue-v2\codemagic.yaml
+3) En Codemagic → Teams → Integrations → App Store Connect:
+   - Creá una API Key en App Store Connect
+     (Usuarios y acceso → Claves de API → Generar)
+   - Subí Issuer ID, Key ID y el archivo .p8 a Codemagic
+4) Code signing: pedile a Codemagic que genere certificados
+   (Automatic code signing) para com.llegue.llegueMobile
+5) En codemagic.yaml reemplazá APP_STORE_APPLE_ID por el número
+   de la app en App Store Connect (App Information → Apple ID)
+6) Start new build → workflow "Llegué iOS TestFlight"
+
+--------------------------------
+PASO C — Invitar conocidos (TestFlight)
+--------------------------------
+1) App Store Connect → tu app → TestFlight
+2) Agregá testers externos (emails) o un grupo público de prueba
+3) Apple puede pedir una breve revisión la primera vez (1–2 días)
+4) Cada amigo:
+   - Instala "TestFlight" desde el App Store
+   - Acepta la invitación del mail
+   - Instala Llegué
+
+Código de entrada en la app: 123456
+(igual que en Android; servidor: https://llegue-api.onrender.com)
+
+--------------------------------
+Qué pedirme en Agent cuando tengas
+--------------------------------
+- "Ya tengo Apple Developer activa" → te ayudo a terminar Codemagic
+- "Tengo la API Key de App Store (.p8)" → configuramos el yaml
+- Si conseguís una Mac prestada → se puede compilar ahí con Xcode
+
+Sin cuenta Apple Developer NO hay forma legal/simple de que
+tus conocidos instalen Llegué en iPhone.

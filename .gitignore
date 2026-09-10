@@ -1,0 +1,13 @@
+﻿.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+**/Pods/
+**/.symlinks/
+**/Flutter/ephemeral/
+*.iml
+.idea/
+.vscode/
+*.apk
+*.ipa
