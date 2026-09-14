@@ -103,4 +103,24 @@ void main() {
       isTrue,
     );
   });
+
+  test('home adulto: hamburguesa y avisos sin tope de 3', () {
+    final home =
+        File('lib/features/family_circle/home_screen.dart').readAsStringSync();
+    expect(home.contains('Icons.menu_rounded'), isTrue);
+    expect(home.contains('Ver más antiguos'), isTrue);
+    expect(home.contains('_openAdultMenu'), isTrue);
+    expect(home.contains('.take(3)'), isFalse);
+    expect(home.contains("onTap: () => setState(() => _moreExpanded"), isFalse);
+  });
+
+  test('aviso usa canal de alarma v5 y tono nativo', () {
+    final src =
+        File('lib/core/notifications/local_alerts.dart').readAsStringSync();
+    expect(src.contains('llegue_siren_v5'), isTrue);
+    expect(src.contains('llegue_alerts_v5'), isTrue);
+    expect(src.contains('AudioAttributesUsage.alarm'), isTrue);
+    expect(src.contains('content://settings/system/alarm_alert'), isTrue);
+    expect(src.contains('InterruptionLevel.critical'), isTrue);
+  });
 }
