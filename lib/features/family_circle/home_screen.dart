@@ -459,9 +459,10 @@ class _HomeScreenState extends State<HomeScreen> {
           kidId: forKidId,
           destinationPlaceId: placeId,
           expectedReturnAt: expectedReturnAt,
+          forceNotify: false,
         );
       },
-      okMsg: isAdultForKid ? 'Salida avisada' : 'Ya avisaste que saliste',
+      okMsg: 'Salida armada',
     );
   }
 

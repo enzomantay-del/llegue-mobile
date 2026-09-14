@@ -530,6 +530,7 @@ class ApiClient {
     String? destinationPlaceId,
     String? expectedReturnAt,
     String? kind,
+    bool? forceNotify,
   }) async {
     final res = await _send(http.post(
       _u('/trips'),
@@ -539,6 +540,7 @@ class ApiClient {
         if (destinationPlaceId != null) 'destinationPlaceId': destinationPlaceId,
         if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
         if (kind != null) 'kind': kind,
+        if (forceNotify != null) 'forceNotify': forceNotify,
       }),
     ));
     return _json(res);

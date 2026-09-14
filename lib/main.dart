@@ -12,6 +12,7 @@ import 'features/family_circle/home_screen.dart';
 import 'features/family_setup/create_family_screen.dart';
 import 'features/family_setup/join_family_screen.dart';
 import 'features/legal/terms_screen.dart';
+import 'features/onboarding/keep_alive_onboarding_screen.dart';
 import 'features/onboarding/permissions_blocked_screen.dart';
 import 'features/onboarding/permissions_location_screen.dart';
 import 'features/onboarding/permissions_notifications_screen.dart';
@@ -116,6 +117,8 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
               const PermissionsLocationScreen(),
           PermissionsNotificationsScreen.route: (_) =>
               const PermissionsNotificationsScreen(),
+          KeepAliveOnboardingScreen.route: (_) =>
+              const KeepAliveOnboardingScreen(),
           PermissionsBlockedScreen.route: (_) =>
               const PermissionsBlockedScreen(),
           SetupChecklistScreen.route: (_) => const SetupChecklistScreen(),
