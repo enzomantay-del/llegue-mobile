@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
+import 'keep_alive_onboarding_screen.dart';
 import 'permissions_blocked_screen.dart';
 
 class PermissionsNotificationsScreen extends StatefulWidget {
@@ -44,7 +45,12 @@ class _PermissionsNotificationsScreenState
       Navigator.of(context).pushNamed(PermissionsBlockedScreen.route);
       return;
     }
-    Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      app.keepAliveOnboardingSeen
+          ? '/home'
+          : KeepAliveOnboardingScreen.route,
+      (_) => false,
+    );
   }
 
   @override

@@ -56,6 +56,7 @@ class AppController extends ChangeNotifier {
   bool permissionsReady = false;
   bool setupChecklistDone = false;
   bool termsAccepted = false;
+  bool keepAliveOnboardingSeen = false;
   String? pendingInviteToken;
   bool bootstrapped = false;
   String? lastError;
@@ -115,6 +116,7 @@ class AppController extends ChangeNotifier {
     // null = app vieja: no empujar checklist. Solo false fuerza el flujo nuevo.
     setupChecklistDone = (await store.setupChecklistDoneFlag) ?? true;
     termsAccepted = await store.termsAccepted;
+    keepAliveOnboardingSeen = await store.keepAliveOnboardingSeen;
     pendingInviteToken = await store.pendingInvite;
 
     await refreshDeviceBinding();
@@ -183,6 +185,7 @@ class AppController extends ChangeNotifier {
     permissionsReady = false;
     setupChecklistDone = false;
     termsAccepted = false;
+    keepAliveOnboardingSeen = false;
     pendingInviteToken = null;
     boundUserName = null;
     boundUserRole = null;
@@ -204,6 +207,12 @@ class AppController extends ChangeNotifier {
   Future<void> acceptTerms() async {
     termsAccepted = true;
     await store.setTermsAccepted(true);
+    notifyListeners();
+  }
+
+  Future<void> markKeepAliveOnboardingSeen() async {
+    keepAliveOnboardingSeen = true;
+    await store.setKeepAliveOnboardingSeen(true);
     notifyListeners();
   }
 
@@ -870,12 +879,14 @@ class AppController extends ChangeNotifier {
     String? destinationPlaceId,
     String? expectedReturnAt,
     String? kind,
+    bool? forceNotify,
   }) async {
     final data = await api.startTrip(
       kidId: kidId,
       destinationPlaceId: destinationPlaceId,
       expectedReturnAt: expectedReturnAt,
       kind: kind,
+      forceNotify: forceNotify,
     );
     await refreshFamilyStatus();
     return data;
@@ -957,6 +968,7 @@ class AppController extends ChangeNotifier {
       return '/create-family';
     }
     if (!permissionsReady) return '/permissions-location';
+    if (!keepAliveOnboardingSeen) return '/onboarding-keep-alive';
     if (isAdult && !setupChecklistDone) return '/setup-checklist';
     return '/home';
   }

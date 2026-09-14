@@ -15,6 +15,7 @@ class SessionStore {
   static const _boundRoleKey = 'bound_user_role';
   static const _setupDoneKey = 'setup_checklist_done';
   static const _termsAcceptedKey = 'terms_accepted_v1';
+  static const _keepAliveSeenKey = 'keep_alive_onboarding_seen_v1';
 
   Future<SharedPreferences> get _p async => SharedPreferences.getInstance();
 
@@ -125,6 +126,13 @@ class SessionStore {
   Future<bool> get termsAccepted async =>
       (await _p).getBool(_termsAcceptedKey) ?? false;
 
+  Future<void> setKeepAliveOnboardingSeen(bool value) async {
+    await (await _p).setBool(_keepAliveSeenKey, value);
+  }
+
+  Future<bool> get keepAliveOnboardingSeen async =>
+      (await _p).getBool(_keepAliveSeenKey) ?? false;
+
   /// Cierra sesión pero NO borra la identidad del celular (un celular = una persona).
   Future<void> clearSession() async {
     final p = await _p;
@@ -135,7 +143,7 @@ class SessionStore {
     await p.remove(_permissionsKey);
     await p.remove(_pendingInviteKey);
     await p.remove(_setupDoneKey);
-    // device_id, bound_* y termsAccepted se conservan
+    // device_id, bound_*, termsAccepted y keepAliveOnboardingSeen se conservan
   }
 
   /// Borra identidad local (como app recién instalada). Conserva URL del servidor.
