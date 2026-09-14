@@ -599,6 +599,14 @@ class ApiClient {
     return _json(res);
   }
 
+  Future<Map<String, dynamic>> listMyNotifications() async {
+    final res = await _send(http.get(
+      _u('/notifications/me'),
+      headers: _headers(auth: true),
+    ));
+    return _json(res);
+  }
+
   Future<bool> ping() async {
     try {
       final res = await _send(http.get(_u('/health')));

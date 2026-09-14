@@ -13,14 +13,26 @@ class LocalAlerts {
   int _id = 100;
 
   /// Canal nuevo: Android no deja cambiar el volumen/sonido de un canal viejo.
-  static const _alertsChannel = 'llegue_alerts_v4';
-  static const _sirenChannel = 'llegue_siren_v4';
+  /// v5 = stream de ALARMA + tono de alarma del sistema (no el de multimedia).
+  static const _alertsChannel = 'llegue_alerts_v5';
+  static const _sirenChannel = 'llegue_siren_v5';
   static const _listeningChannel = 'llegue_listening_v1';
+
+  /// Tono nativo de alarma del celular (RingtoneManager.TYPE_ALARM).
+  static const _alarmSound = UriAndroidNotificationSound(
+    'content://settings/system/alarm_alert',
+  );
 
   Future<void> init() async {
     if (_ready) return;
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const ios = DarwinInitializationSettings();
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestSoundPermission: true,
+      defaultPresentAlert: true,
+      defaultPresentSound: true,
+      defaultPresentBanner: true,
+    );
     await _plugin.initialize(
       settings: const InitializationSettings(android: android, iOS: ios),
     );
@@ -34,13 +46,16 @@ class LocalAlerts {
     } catch (_) {}
 
     await androidPlugin?.createNotificationChannel(
-      const AndroidNotificationChannel(
+      AndroidNotificationChannel(
         _alertsChannel,
         'Avisos de familia',
-        description: 'Llegadas, salidas y novedades',
+        description: 'Llegadas, salidas y novedades (volumen de alarma)',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        sound: _alarmSound,
+        vibrationPattern: Int64List.fromList([0, 250, 120, 250]),
       ),
     );
     await androidPlugin?.createNotificationChannel(
@@ -51,8 +66,10 @@ class LocalAlerts {
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
-        // Usa el volumen de ALARMA del celular (más fuerte que multimedia)
+        enableLights: true,
+        // Volumen de ALARMA del celular (no el de música / multimedia).
         audioAttributesUsage: AudioAttributesUsage.alarm,
+        sound: _alarmSound,
         vibrationPattern: Int64List.fromList([0, 600, 200, 600, 200, 800]),
       ),
     );
@@ -86,18 +103,16 @@ class LocalAlerts {
           urgent ? 'Alarmas Llegué' : 'Avisos de familia',
           channelDescription: urgent
               ? 'Ayuda, app cerrada y avisos fuertes'
-              : 'Llegadas, salidas y novedades',
+              : 'Llegadas, salidas y novedades (volumen de alarma)',
           importance: Importance.max,
           priority: Priority.max,
           playSound: true,
           enableVibration: true,
+          enableLights: urgent,
           fullScreenIntent: urgent,
-          category: urgent
-              ? AndroidNotificationCategory.alarm
-              : AndroidNotificationCategory.message,
-          audioAttributesUsage: urgent
-              ? AudioAttributesUsage.alarm
-              : AudioAttributesUsage.notification,
+          category: AndroidNotificationCategory.alarm,
+          audioAttributesUsage: AudioAttributesUsage.alarm,
+          sound: _alarmSound,
           vibrationPattern: urgent
               ? Int64List.fromList([0, 600, 200, 600, 200, 800, 200, 1000])
               : Int64List.fromList([0, 250, 120, 250]),
@@ -109,10 +124,16 @@ class LocalAlerts {
         ),
         iOS: DarwinNotificationDetails(
           presentAlert: true,
+          presentBanner: true,
           presentSound: true,
+          presentList: true,
+          // iOS no usa stream de alarma. Critical Alerts (volumen máximo
+          // incluso en silencio) requiere entitlement de Apple; sin eso el
+          // sistema degrada a timeSensitive / sonido de notificación.
           interruptionLevel: urgent
-              ? InterruptionLevel.timeSensitive
-              : InterruptionLevel.active,
+              ? InterruptionLevel.critical
+              : InterruptionLevel.timeSensitive,
+          criticalSoundVolume: urgent ? 1.0 : null,
         ),
       ),
     );

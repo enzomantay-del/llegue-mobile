@@ -27,7 +27,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _busy = false;
-  bool _moreExpanded = false;
+  bool _loadingOlder = false;
+  bool _olderLoaded = false;
+  List<Map<String, dynamic>> _olderAlerts = [];
 
   @override
   void initState() {
@@ -524,8 +526,9 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Prueba de alarma'),
         content: const Text(
-          'Si viste el aviso arriba y sentiste vibración, '
-          'este celular puede recibirte los avisos de la familia.',
+          'Tenés que escuchar fuerte y sentir vibración. '
+          'Si se oye bajo, subí el volumen de ALARMA del celular '
+          '(no el de música).',
         ),
         actions: [
           FilledButton(
@@ -535,6 +538,134 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _openAdultMenu() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    'Más opciones',
+                    style: Theme.of(sheetContext).textTheme.titleLarge,
+                  ),
+                ),
+                _MenuTile(
+                  icon: Icons.person_outline_rounded,
+                  label: 'Mi perfil',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    Navigator.of(context).pushNamed(ProfileScreen.route);
+                  },
+                ),
+                _MenuTile(
+                  icon: Icons.help_outline_rounded,
+                  label: 'Ayuda',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    Navigator.of(context).pushNamed(HelpScreen.route);
+                  },
+                ),
+                _MenuTile(
+                  icon: Icons.directions_walk_rounded,
+                  label: 'Salida especial de un hijo/a',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _adultPickKidOuting();
+                  },
+                ),
+                _MenuTile(
+                  icon: Icons.notifications_outlined,
+                  label: 'Qué avisos quiero recibir',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    Navigator.of(context).pushNamed(AlertPrefsScreen.route);
+                  },
+                ),
+                _MenuTile(
+                  icon: Icons.alarm_rounded,
+                  label: 'Probar la alarma',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _testAlerts();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _loadOlderAlerts() async {
+    final app = context.read<AppController>();
+    setState(() => _loadingOlder = true);
+    try {
+      List<Map<String, dynamic>> extra = [];
+      try {
+        final data = await app.api.listMyNotifications();
+        extra = (data['notifications'] as List<dynamic>? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        final data = await app.api.listEvents();
+        extra = (data['events'] as List<dynamic>? ?? []).map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'id': m['id'],
+            'title': 'Llegué',
+            'body': m['message'] ?? '',
+            'createdAt': m['createdAt'],
+          };
+        }).toList();
+      }
+      if (!mounted) return;
+      setState(() {
+        _olderAlerts = extra;
+        _olderLoaded = true;
+        _loadingOlder = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _alertItems(AppController app) {
+    final raw = app.notifications.isNotEmpty
+        ? app.notifications
+        : app.recentEvents.map((e) => <String, dynamic>{
+              'id': e['id'],
+              'title': 'Llegué',
+              'body': e['message'] ?? '',
+              'createdAt': e['createdAt'],
+            });
+    final primary =
+        raw.map((n) => Map<String, dynamic>.from(n)).toList();
+    if (_olderAlerts.isEmpty) return primary;
+    final seen = <Object?>{
+      for (final a in primary) a['id'] ?? '${a['body']}|${a['createdAt']}',
+    };
+    final merged = [...primary];
+    for (final a in _olderAlerts) {
+      final key = a['id'] ?? '${a['body']}|${a['createdAt']}';
+      if (seen.add(key)) merged.add(a);
+    }
+    merged.sort((a, b) {
+      final as = a['createdAt'] as String? ?? '';
+      final bs = b['createdAt'] as String? ?? '';
+      return bs.compareTo(as);
+    });
+    return merged;
   }
 
   Future<void> _suggestPlaceFromHome() async {
@@ -571,6 +702,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               familyName: familyName,
                               onOpenSettings: () => Navigator.of(context)
                                   .pushNamed(SettingsHubScreen.route),
+                              onOpenMenu: app.isAdult ? _openAdultMenu : null,
                             ),
                             const SizedBox(height: 24),
                             if (app.isKid)
@@ -598,15 +730,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Widget> _buildAdultHome(AppController app) {
     final kids = app.members.where((m) => m['role'] == 'kid').toList();
     final primaryKid = kids.isNotEmpty ? kids.first : null;
-    final alerts = (app.notifications.isNotEmpty
-            ? app.notifications
-            : app.recentEvents.map((e) => {
-                  'title': 'Llegué',
-                  'body': e['message'] ?? '',
-                  'createdAt': e['createdAt'],
-                }))
-        .take(3)
-        .toList();
+    final alerts = _alertItems(app);
 
     return [
       if (primaryKid == null) ...[
@@ -743,8 +867,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         )
       else
-        ...alerts.map((n) {
-          final map = Map<String, dynamic>.from(n as Map);
+        ...alerts.map((map) {
           return _AlertTile(
             body: map['body'] as String? ??
                 map['title'] as String? ??
@@ -752,57 +875,17 @@ class _HomeScreenState extends State<HomeScreen> {
             when: map['createdAt'] as String?,
           );
         }),
-      const SizedBox(height: 18),
-      InkWell(
-        onTap: () => setState(() => _moreExpanded = !_moreExpanded),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Row(
-            children: [
-              Text(
-                'Más opciones',
-                style: GoogleFonts.dmSans(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Icon(
-                _moreExpanded
-                    ? Icons.expand_less_rounded
-                    : Icons.expand_more_rounded,
-                color: Colors.white.withValues(alpha: 0.85),
-                size: 20,
-              ),
-            ],
+      if (!_olderLoaded) ...[
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _loadingOlder ? null : _loadOlderAlerts,
+          child: Text(
+            _loadingOlder ? 'Cargando…' : 'Ver más antiguos',
+            style: GoogleFonts.dmSans(
+              color: Colors.white.withValues(alpha: 0.85),
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-      ),
-      if (_moreExpanded) ...[
-        const SizedBox(height: 4),
-        _MoreLink(
-          label: 'Mi perfil',
-          onPressed: () =>
-              Navigator.of(context).pushNamed(ProfileScreen.route),
-        ),
-        _MoreLink(
-          label: 'Ayuda',
-          onPressed: () => Navigator.of(context).pushNamed(HelpScreen.route),
-        ),
-        _MoreLink(
-          label: 'Salida especial de un hijo/a',
-          onPressed: _adultPickKidOuting,
-        ),
-        _MoreLink(
-          label: 'Qué avisos quiero recibir',
-          onPressed: () =>
-              Navigator.of(context).pushNamed(AlertPrefsScreen.route),
-        ),
-        _MoreLink(
-          label: 'Probar la alarma',
-          onPressed: _testAlerts,
         ),
       ],
     ];
@@ -968,15 +1051,26 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.familyName, required this.onOpenSettings});
+  const _TopBar({
+    required this.familyName,
+    required this.onOpenSettings,
+    this.onOpenMenu,
+  });
 
   final String familyName;
   final VoidCallback onOpenSettings;
+  final VoidCallback? onOpenMenu;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
+        if (onOpenMenu != null)
+          IconButton(
+            onPressed: onOpenMenu,
+            tooltip: 'Menú',
+            icon: const Icon(Icons.menu_rounded, color: Colors.white),
+          ),
         const BrandMark(size: 36, showShadow: false),
         const SizedBox(width: 12),
         Expanded(
@@ -1154,32 +1248,30 @@ class _PrimaryButton extends StatelessWidget {
   }
 }
 
-class _MoreLink extends StatelessWidget {
-  const _MoreLink({required this.label, required this.onPressed});
+class _MenuTile extends StatelessWidget {
+  const _MenuTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
+  final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: TextButton(
-        onPressed: onPressed,
-        style: TextButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.8),
-          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
-        ),
-        child: Text(
-          label,
-          style: GoogleFonts.dmSans(
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-            decoration: TextDecoration.underline,
-            decorationColor: Colors.white.withValues(alpha: 0.45),
-          ),
+    return ListTile(
+      leading: Icon(icon, color: Colors.white),
+      title: Text(
+        label,
+        style: GoogleFonts.dmSans(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
         ),
       ),
+      onTap: onTap,
     );
   }
 }
