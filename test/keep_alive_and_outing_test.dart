@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:llegue_mobile/core/state/app_controller.dart';
@@ -14,10 +13,6 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-  });
-
-  tearDown(() {
-    debugDefaultTargetPlatformOverride = null;
   });
 
   test('copy iOS vs Android', () {
@@ -60,7 +55,6 @@ void main() {
   });
 
   testWidgets('pantalla: título, Entendido, sin skip', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final app = AppController();
     app.api.accessToken = 't';
     app.user = {
