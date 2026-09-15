@@ -114,13 +114,19 @@ void main() {
     expect(home.contains("onTap: () => setState(() => _moreExpanded"), isFalse);
   });
 
-  test('aviso usa canal de alarma v5 y tono nativo', () {
+  test('aviso usa canal v6 con sonido raw y volumen de notificaciones', () {
     final src =
         File('lib/core/notifications/local_alerts.dart').readAsStringSync();
-    expect(src.contains('llegue_siren_v5'), isTrue);
-    expect(src.contains('llegue_alerts_v5'), isTrue);
-    expect(src.contains('AudioAttributesUsage.alarm'), isTrue);
-    expect(src.contains('content://settings/system/alarm_alert'), isTrue);
+    expect(src.contains('llegue_siren_v6'), isTrue);
+    expect(src.contains('llegue_alerts_v6'), isTrue);
+    expect(src.contains("RawResourceAndroidNotificationSound('llegue_alert')"),
+        isTrue);
+    expect(src.contains('AudioAttributesUsage.notification'), isTrue);
+    expect(src.contains('content://settings/system/alarm_alert'), isFalse);
     expect(src.contains('InterruptionLevel.critical'), isTrue);
+    expect(
+      File('android/app/src/main/res/raw/llegue_alert.wav').existsSync(),
+      isTrue,
+    );
   });
 }
