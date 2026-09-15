@@ -11,6 +11,7 @@ class LocalAlerts {
   bool _ready = false;
   bool _listeningShown = false;
   int _id = 100;
+  void Function(String payload)? onSelected;
 
   /// Android congela sonido/volumen del canal al crearlo.
   /// v5 usaba USAGE_ALARM + URI de alarma: vibraba y no sonaba si el usuario
@@ -43,6 +44,11 @@ class LocalAlerts {
     );
     await _plugin.initialize(
       settings: const InitializationSettings(android: android, iOS: ios),
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload == null || payload.isEmpty) return;
+        onSelected?.call(payload);
+      },
     );
 
     final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
@@ -99,17 +105,30 @@ class LocalAlerts {
     _ready = true;
   }
 
+  Future<String?> consumeLaunchPayload() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp == true) {
+        final payload = details?.notificationResponse?.payload;
+        if (payload != null && payload.isNotEmpty) return payload;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> show({
     required String title,
     required String body,
     bool urgent = false,
     DateTime? eventTime,
+    String? payload,
   }) async {
     await init();
     await _plugin.show(
       id: _id++,
       title: title,
       body: body,
+      payload: payload,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           urgent ? _sirenChannel : _alertsChannel,

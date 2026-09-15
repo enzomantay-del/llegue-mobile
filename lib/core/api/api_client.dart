@@ -531,6 +531,8 @@ class ApiClient {
     String? expectedReturnAt,
     String? kind,
     bool? forceNotify,
+    String? createdById,
+    String? createdByName,
   }) async {
     final res = await _send(http.post(
       _u('/trips'),
@@ -541,6 +543,8 @@ class ApiClient {
         if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
         if (kind != null) 'kind': kind,
         if (forceNotify != null) 'forceNotify': forceNotify,
+        if (createdById != null) 'createdById': createdById,
+        if (createdByName != null) 'createdByName': createdByName,
       }),
     ));
     return _json(res);

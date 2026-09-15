@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/copy/outing_copy.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/brand_mark.dart';
@@ -14,6 +15,7 @@ import '../settings/alert_prefs_screen.dart';
 import '../settings/help_screen.dart';
 import '../settings/profile_screen.dart';
 import '../settings/settings_hub_screen.dart';
+import 'kid_offline_help_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -361,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 8),
                   Text(
                     isAdultForKid
-                        ? 'Elegí a dónde va. La app avisa sola cuando llegue (no hace falta que toque “Ya llegué”).'
+                        ? 'Elegí a dónde va. La app avisa sola cuando llegue.'
                         : 'Elegí a dónde vas. La app avisa sola cuando llegues.',
                   ),
                   const SizedBox(height: 14),
@@ -868,11 +870,42 @@ class _HomeScreenState extends State<HomeScreen> {
         )
       else
         ...alerts.map((map) {
+          final eventId = map['eventId'];
+          Map<String, dynamic>? event;
+          if (eventId != null) {
+            for (final e in app.recentEvents) {
+              if (e['id'] == eventId) {
+                event = e;
+                break;
+              }
+            }
+          }
+          final raw = map['body'] as String? ??
+              map['title'] as String? ??
+              'Aviso';
+          final body = app.formatFamilyMessage(
+            raw,
+            kidId: event?['kidId'] as String? ?? map['kidId'] as String?,
+            event: event ?? map,
+          );
+          final offline = KidOfflineInfo.resolve(
+            title: map['title'] as String?,
+            body: raw,
+            type: event?['type'] as String? ?? map['type'] as String?,
+            kidId: event?['kidId'] as String? ?? map['kidId'] as String?,
+            members: app.members,
+          );
           return _AlertTile(
-            body: map['body'] as String? ??
-                map['title'] as String? ??
-                'Aviso',
+            body: body,
             when: map['createdAt'] as String?,
+            onTap: offline == null
+                ? null
+                : () {
+                    Navigator.of(context).pushNamed(
+                      KidOfflineHelpScreen.route,
+                      arguments: offline,
+                    );
+                  },
           );
         }),
       if (!_olderLoaded) ...[
@@ -896,6 +929,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final destName = trip?['destinationName'] as String?;
     final isHomeTrip =
         trip?['destinationType'] == 'home' || destName == 'Casa';
+    final outingCreator = trip == null
+        ? null
+        : app.resolveOutingCreator(
+            trip: trip,
+            kidId: app.user?['id'] as String?,
+          );
+    final adultArmedOuting = outingCreator?.id != null &&
+        outingCreator!.id != app.user?['id'];
 
     return [
       Text(
@@ -972,6 +1013,24 @@ class _HomeScreenState extends State<HomeScreen> {
                   height: 1.35,
                 ),
               ),
+              if (!isHomeTrip && adultArmedOuting) ...[
+                const SizedBox(height: 8),
+                Text(
+                  app.formatFamilyMessage(
+                    OutingCopy.kidFallback +
+                        (destName == null ? '' : ' a $destName'),
+                    kidName: app.displayName,
+                    kidId: app.user?['id'] as String?,
+                    trip: trip,
+                  ),
+                  style: GoogleFonts.dmSans(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    height: 1.35,
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () => _editActiveTrip(trip),
@@ -991,21 +1050,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextButton.styleFrom(foregroundColor: Colors.white),
                 child: Text(
                   'Cancelar salida',
-                  style: GoogleFonts.dmSans(fontWeight: FontWeight.w600),
-                ),
-              ),
-              TextButton(
-                onPressed: () => _run(
-                  () async {
-                    await app.arriveTrip(trip['id'] as String);
-                  },
-                  okMsg: 'Avisaste que llegaste (respaldo)',
-                ),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white.withValues(alpha: 0.9),
-                ),
-                child: Text(
-                  'Ya llegué (solo si falla el GPS)',
                   style: GoogleFonts.dmSans(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -1115,8 +1159,21 @@ class _KidHeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final app = context.watch<AppController>();
     final label = member['presenceLabel'] as String? ?? 'Sin novedades';
     final last = member['lastEvent'] as Map?;
+    final trip = member['activeTrip'] is Map
+        ? Map<String, dynamic>.from(member['activeTrip'] as Map)
+        : null;
+    final lastMessage = last == null
+        ? ''
+        : app.formatFamilyMessage(
+            last['message'] as String? ?? '',
+            kidName: member['name'] as String?,
+            kidId: member['id'] as String?,
+            trip: trip,
+            event: Map<String, dynamic>.from(last),
+          );
 
     return Container(
       width: double.infinity,
@@ -1148,7 +1205,7 @@ class _KidHeroCard extends StatelessWidget {
           if (last != null) ...[
             const SizedBox(height: 14),
             Text(
-              last['message'] as String? ?? '',
+              lastMessage,
               style: GoogleFonts.dmSans(
                 color: Colors.white.withValues(alpha: 0.85),
                 fontSize: 15,
@@ -1277,43 +1334,51 @@ class _MenuTile extends StatelessWidget {
 }
 
 class _AlertTile extends StatelessWidget {
-  const _AlertTile({required this.body, this.when});
+  const _AlertTile({required this.body, this.when, this.onTap});
 
   final String body;
   final String? when;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: appGlassDecoration(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              body,
-              style: GoogleFonts.dmSans(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
-                height: 1.3,
-              ),
-            ),
-            if (when != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                _friendlyTime(when!),
-                style: GoogleFonts.dmSans(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 15,
-                  color: Colors.white,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: appGlassDecoration(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  body,
+                  style: GoogleFonts.dmSans(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    height: 1.3,
+                  ),
                 ),
-              ),
-            ],
-          ],
+                if (when != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _friendlyTime(when!),
+                    style: GoogleFonts.dmSans(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -16,6 +16,7 @@ class SessionStore {
   static const _setupDoneKey = 'setup_checklist_done';
   static const _termsAcceptedKey = 'terms_accepted_v1';
   static const _keepAliveSeenKey = 'keep_alive_onboarding_seen_v1';
+  static const _tripCreatorsKey = 'trip_creators_v1';
 
   Future<SharedPreferences> get _p async => SharedPreferences.getInstance();
 
@@ -171,6 +172,49 @@ class SessionStore {
     if (role != null && role.isNotEmpty) {
       await p.setString(_boundRoleKey, role);
     }
+  }
+
+  Future<Map<String, dynamic>> _tripCreators() async {
+    final raw = (await _p).getString(_tripCreatorsKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveTripCreator({
+    required String tripId,
+    required String createdById,
+    required String createdByName,
+    String? kidId,
+  }) async {
+    final all = await _tripCreators();
+    final entry = {
+      'createdById': createdById,
+      'createdByName': createdByName,
+      if (kidId != null) 'kidId': kidId,
+    };
+    all[tripId] = entry;
+    if (kidId != null && kidId.isNotEmpty) {
+      all['kid:$kidId'] = {...entry, 'tripId': tripId};
+    }
+    await (await _p).setString(_tripCreatorsKey, jsonEncode(all));
+  }
+
+  Future<Map<String, dynamic>?> tripCreator({
+    String? tripId,
+    String? kidId,
+  }) async {
+    final all = await _tripCreators();
+    if (tripId != null && all[tripId] is Map) {
+      return Map<String, dynamic>.from(all[tripId] as Map);
+    }
+    if (kidId != null && all['kid:$kidId'] is Map) {
+      return Map<String, dynamic>.from(all['kid:$kidId'] as Map);
+    }
+    return null;
   }
 
   @Deprecated('Usar clearSession para no romper un-celular-un-rol')

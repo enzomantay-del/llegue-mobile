@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api/api_client.dart';
+import '../copy/outing_copy.dart';
 import '../device/device_identity.dart';
 import '../geofence/geofence_monitor.dart';
 import '../notifications/local_alerts.dart';
@@ -436,6 +438,18 @@ class AppController extends ChangeNotifier {
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
+    for (var i = 0; i < members.length; i++) {
+      final m = members[i];
+      if (m['role'] != 'kid') continue;
+      final tripRaw = m['activeTrip'];
+      if (tripRaw is Map) {
+        m['activeTrip'] = await _hydrateTrip(
+          Map<String, dynamic>.from(tripRaw),
+          kidId: m['id'] as String?,
+        );
+      }
+    }
+
     if (isKid) {
       Map<String, dynamic>? me;
       for (final m in members) {
@@ -588,6 +602,7 @@ class AppController extends ChangeNotifier {
         if (clock != null && !body.contains(clock)) {
           body = '$clock · $body';
         }
+        body = formatFamilyMessage(body);
         final lower = '${title.toLowerCase()} ${body.toLowerCase()}';
         final urgent = lower.contains('ayuda') ||
             lower.contains('llegó') ||
@@ -605,6 +620,7 @@ class AppController extends ChangeNotifier {
           body: body,
           urgent: urgent,
           eventTime: eventTime,
+          payload: _payloadForNotice(title: title, body: body, notice: n),
         );
       }
       return;
@@ -625,7 +641,7 @@ class AppController extends ChangeNotifier {
       if (!allowed) continue;
       await alerts.show(
         title: n['title'] as String? ?? 'Llegué',
-        body: n['body'] as String? ?? 'Hay una novedad',
+        body: formatFamilyMessage(n['body'] as String? ?? 'Hay una novedad'),
       );
     }
   }
@@ -881,13 +897,33 @@ class AppController extends ChangeNotifier {
     String? kind,
     bool? forceNotify,
   }) async {
+    final createdById = user?['id'] as String?;
+    final createdByName = displayName;
     final data = await api.startTrip(
       kidId: kidId,
       destinationPlaceId: destinationPlaceId,
       expectedReturnAt: expectedReturnAt,
       kind: kind,
       forceNotify: forceNotify,
+      createdById: createdById,
+      createdByName: createdByName,
     );
+    final tripRaw = data['trip'];
+    if (tripRaw is Map && createdById != null) {
+      final trip = Map<String, dynamic>.from(tripRaw);
+      trip['createdById'] ??= createdById;
+      trip['createdByName'] ??= createdByName;
+      data['trip'] = trip;
+      final tripId = trip['id'] as String?;
+      if (tripId != null && tripId.isNotEmpty) {
+        await store.saveTripCreator(
+          tripId: tripId,
+          createdById: createdById,
+          createdByName: createdByName,
+          kidId: kidId ?? (isKid ? (user?['id'] as String?) : null),
+        );
+      }
+    }
     await refreshFamilyStatus();
     return data;
   }
@@ -971,5 +1007,157 @@ class AppController extends ChangeNotifier {
     if (!keepAliveOnboardingSeen) return '/onboarding-keep-alive';
     if (isAdult && !setupChecklistDone) return '/setup-checklist';
     return '/home';
+  }
+
+  Future<Map<String, dynamic>> _hydrateTrip(
+    Map<String, dynamic> trip, {
+    String? kidId,
+  }) async {
+    if (OutingCopy.creatorNameFromTrip(trip) != null &&
+        OutingCopy.creatorIdFromTrip(trip) != null) {
+      return trip;
+    }
+    final saved = await store.tripCreator(
+      tripId: trip['id'] as String?,
+      kidId: kidId ?? trip['kidId'] as String?,
+    );
+    if (saved == null) return trip;
+    trip['createdById'] ??= saved['createdById'];
+    trip['createdByName'] ??= saved['createdByName'];
+    return trip;
+  }
+
+  Map<String, dynamic>? tripForKid(String? kidId) {
+    if (kidId == null) return isKid ? activeTrip : null;
+    for (final m in members) {
+      if (m['id'] == kidId && m['activeTrip'] is Map) {
+        return Map<String, dynamic>.from(m['activeTrip'] as Map);
+      }
+    }
+    return null;
+  }
+
+  String _kidName(String? kidId) {
+    if (kidId != null) {
+      for (final m in members) {
+        if (m['id'] == kidId) {
+          final n = (m['name'] as String?)?.trim();
+          if (n != null && n.isNotEmpty) return n;
+        }
+      }
+    }
+    if (isKid) return displayName;
+    final kids = members.where((m) => m['role'] == 'kid').toList();
+    if (kids.length == 1) {
+      return (kids.first['name'] as String?)?.trim().isNotEmpty == true
+          ? kids.first['name'] as String
+          : 'tu hijo/a';
+    }
+    return 'tu hijo/a';
+  }
+
+  ({String? id, String? name, bool viewerCreated}) resolveOutingCreator({
+    Map<String, dynamic>? trip,
+    Map<String, dynamic>? event,
+    String? kidId,
+  }) {
+    Map<String, dynamic>? payload;
+    final rawPayload = event?['payload'];
+    if (rawPayload is Map) {
+      payload = Map<String, dynamic>.from(rawPayload);
+    }
+    var id = OutingCopy.creatorIdFromTrip(trip) ??
+        payload?['createdById'] as String? ??
+        payload?['createdByUserId'] as String?;
+    var name = OutingCopy.creatorNameFromTrip(trip) ??
+        payload?['createdByName'] as String?;
+    if ((name ?? '').trim().isEmpty) name = null;
+
+    if (id == null || name == null) {
+      final adults = members
+          .where(
+            (m) => m['role'] == 'adult' || m['role'] == 'admin_adult',
+          )
+          .toList();
+      final titular =
+          adults.where((m) => m['role'] == 'admin_adult').toList();
+      Map<String, dynamic>? guess;
+      if (adults.length == 1) {
+        guess = adults.first;
+      } else if (titular.length == 1) {
+        guess = titular.first;
+      }
+      if (guess != null) {
+        id ??= guess['id'] as String?;
+        name ??= (guess['name'] as String?)?.trim();
+      }
+    }
+
+    final viewerId = user?['id'] as String? ?? '';
+    return (
+      id: id,
+      name: name,
+      viewerCreated: id != null && id == viewerId,
+    );
+  }
+
+  String formatFamilyMessage(
+    String raw, {
+    String? kidName,
+    String? kidId,
+    Map<String, dynamic>? trip,
+    Map<String, dynamic>? event,
+  }) {
+    if (!OutingCopy.looksLikeSpecialOutingCopy(raw)) return raw;
+    final resolvedKidId = kidId ??
+        event?['kidId'] as String? ??
+        trip?['kidId'] as String?;
+    final resolvedTrip = trip ?? tripForKid(resolvedKidId);
+    final creator = resolveOutingCreator(
+      trip: resolvedTrip,
+      event: event,
+      kidId: resolvedKidId,
+    );
+    return OutingCopy.rewrite(
+      raw: raw,
+      viewerIsKid: isKid,
+      viewerId: user?['id'] as String? ?? '',
+      kidName: kidName ?? _kidName(resolvedKidId),
+      creatorId: creator.id,
+      creatorName: creator.name,
+      destination: resolvedTrip?['destinationName'] as String?,
+      viewerCreated: creator.viewerCreated,
+    );
+  }
+
+  String? _payloadForNotice({
+    required String title,
+    required String body,
+    Map<String, dynamic>? notice,
+  }) {
+    final info = KidOfflineInfo.resolve(
+      title: title,
+      body: body,
+      type: notice?['type'] as String?,
+      kidId: notice?['kidId'] as String?,
+      members: members,
+    );
+    if (info == null) return null;
+    return jsonEncode(info.toJson());
+  }
+
+  KidOfflineInfo? kidOfflineFromPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    try {
+      final map = jsonDecode(payload);
+      if (map is Map) {
+        return KidOfflineInfo.fromJson(Map<String, dynamic>.from(map));
+      }
+    } catch (_) {}
+    return KidOfflineInfo.resolve(
+      title: payload,
+      body: payload,
+      members: members,
+    );
   }
 }

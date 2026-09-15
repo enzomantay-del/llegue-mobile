@@ -97,11 +97,14 @@ void main() {
     expect(home.contains('forceNotify: false'), isTrue);
     expect(home.contains("okMsg: 'Salida armada'"), isTrue);
     expect(home.contains('Ya avisaste que saliste'), isFalse);
+    expect(home.contains('Ya llegué'), isFalse);
+    expect(home.contains('arriveTrip'), isFalse);
     final api = File('lib/core/api/api_client.dart').readAsStringSync();
     expect(
       api.contains("if (forceNotify != null) 'forceNotify': forceNotify"),
       isTrue,
     );
+    expect(api.contains("'createdByName': createdByName"), isTrue);
   });
 
   test('home adulto: hamburguesa y avisos sin tope de 3', () {
@@ -124,9 +127,27 @@ void main() {
     expect(src.contains('AudioAttributesUsage.notification'), isTrue);
     expect(src.contains('content://settings/system/alarm_alert'), isFalse);
     expect(src.contains('InterruptionLevel.critical'), isTrue);
+    expect(src.contains('onDidReceiveNotificationResponse'), isTrue);
+    expect(src.contains('payload: payload'), isTrue);
     expect(
       File('android/app/src/main/res/raw/llegue_alert.wav').existsSync(),
       isTrue,
+    );
+  });
+
+  test('launcher usa el arte original sin cápsula blanca', () {
+    expect(File('assets/brand/app_icon.png').existsSync(), isTrue);
+    expect(File('assets/brand/app_icon_launcher.png').existsSync(), isTrue);
+    final xml = File(
+      'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
+    ).readAsStringSync();
+    expect(xml.contains('ic_launcher_foreground'), isTrue);
+    expect(xml.contains('ic_launcher_background'), isTrue);
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    expect(pubspec.contains('app_icon_launcher.png'), isTrue);
+    expect(
+      File('lib/core/widgets/brand_mark.dart').readAsStringSync(),
+      contains('assets/brand/app_icon.png'),
     );
   });
 }
