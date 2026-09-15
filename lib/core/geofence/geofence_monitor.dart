@@ -20,6 +20,59 @@ class GeofenceTransition {
   final double lng;
 }
 
+/// Lugares que el celular del menor tiene que vigilar.
+/// No es “solo Casa”: siempre los lugares activos de la familia, y si hay
+/// salida especial, el destinationPlaceId entra sí o sí (aunque falte en la
+/// lista filtrada), usando lat/lng del lugar o del viaje.
+List<Map<String, dynamic>> placesForKidGeofence({
+  required List<Map<String, dynamic>> familyPlaces,
+  Map<String, dynamic>? activeTrip,
+}) {
+  final byId = <String, Map<String, dynamic>>{};
+
+  void put(Map<String, dynamic> raw, {bool ignoreStatus = false}) {
+    final id = raw['id'] as String?;
+    final lat = (raw['lat'] as num?)?.toDouble();
+    final lng = (raw['lng'] as num?)?.toDouble();
+    if (id == null || id.isEmpty || lat == null || lng == null) return;
+    final status = raw['status'] as String?;
+    if (!ignoreStatus && status != null && status != 'active') return;
+    byId[id] = raw;
+  }
+
+  for (final p in familyPlaces) {
+    put(p);
+  }
+
+  final destId = activeTrip?['destinationPlaceId'] as String?;
+  if (destId != null && destId.isNotEmpty && !byId.containsKey(destId)) {
+    Map<String, dynamic>? found;
+    for (final p in familyPlaces) {
+      if (p['id'] == destId) {
+        found = p;
+        break;
+      }
+    }
+    if (found != null) {
+      put({...found, 'status': 'active'}, ignoreStatus: true);
+    } else {
+      final lat = (activeTrip?['destinationLat'] as num?)?.toDouble();
+      final lng = (activeTrip?['destinationLng'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        put({
+          'id': destId,
+          'name': activeTrip?['destinationName'] ?? 'Destino',
+          'lat': lat,
+          'lng': lng,
+          'radiusM': activeTrip?['destinationRadiusM'] ?? 60,
+          'status': 'active',
+        }, ignoreStatus: true);
+      }
+    }
+  }
+  return byId.values.toList();
+}
+
 /// Detecta entrar/salir de lugares con tiempo de gracia (anti-rebote GPS).
 class GeofenceMonitor {
   GeofenceMonitor({
@@ -48,7 +101,21 @@ class GeofenceMonitor {
     _places = places
         .where((p) => p['status'] == null || p['status'] == 'active')
         .toList();
+    final ids = <String>{};
+    for (final p in _places) {
+      final id = p['id'] as String?;
+      if (id != null) ids.add(id);
+    }
+    _inside.removeWhere((id, _) => !ids.contains(id));
+    _pendingSince.removeWhere((id, _) => !ids.contains(id));
+    _pendingType.removeWhere((id, _) => !ids.contains(id));
   }
+
+  /// IDs actualmente en el loop (tests / diagnóstico).
+  List<String> get watchedPlaceIds => [
+        for (final p in _places)
+          if (p['id'] is String) p['id'] as String,
+      ];
 
   Future<void> start() async {
     if (kIsWeb) return;

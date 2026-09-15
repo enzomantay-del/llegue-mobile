@@ -465,7 +465,7 @@ class AppController extends ChangeNotifier {
       activeTrip = null;
     }
 
-    geofence.updatePlaces(places);
+    _syncGeofencePlaces();
     await _notifyNewAdultAlerts();
     await store.saveFamily(family);
     // Familia ya armada (seed): no forzar checklist
@@ -485,7 +485,7 @@ class AppController extends ChangeNotifier {
       return;
     }
 
-    geofence.updatePlaces(places);
+    _syncGeofencePlaces();
     if (!geofence.running) {
       await geofence.start();
       monitoring = geofence.running;
@@ -544,18 +544,33 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _syncGeofencePlaces() {
+    final watched = isKid
+        ? placesForKidGeofence(
+            familyPlaces: places,
+            activeTrip: activeTrip,
+          )
+        : places;
+    geofence.updatePlaces(watched);
+  }
+
   Future<void> _onGeofenceTransition(GeofenceTransition t) async {
     // Solo el celular del hijo/a genera llegadas y salidas.
     if (!isKid) return;
     try {
+      final tripId = activeTrip?['id'] as String?;
       await api.postEvent(
         type: t.type,
         placeId: t.placeId,
+        tripId: tripId,
         forceNotify: true,
         payload: {
           'source': 'geofence',
           'lat': t.lat,
           'lng': t.lng,
+          if (tripId != null) 'tripId': tripId,
+          if (activeTrip?['destinationPlaceId'] != null)
+            'destinationPlaceId': activeTrip!['destinationPlaceId'],
         },
       );
       await refreshFamilyStatus();
@@ -740,7 +755,7 @@ class AppController extends ChangeNotifier {
   Future<void> deletePlace(String placeId) async {
     await api.deletePlace(placeId);
     await refreshFamilyStatus();
-    geofence.updatePlaces(places);
+    _syncGeofencePlaces();
   }
 
   Future<Map<String, dynamic>> updatePlace({
