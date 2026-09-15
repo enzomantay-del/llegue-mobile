@@ -548,6 +548,7 @@ class AppController extends ChangeNotifier {
     final watched = isKid
         ? placesForKidGeofence(
             familyPlaces: places,
+            extraPlaces: pendingPlaces,
             activeTrip: activeTrip,
           )
         : places;
