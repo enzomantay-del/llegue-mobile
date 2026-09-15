@@ -526,9 +526,9 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Prueba de alarma'),
         content: const Text(
-          'Tenés que escuchar fuerte y sentir vibración. '
-          'Si se oye bajo, subí el volumen de ALARMA del celular '
-          '(no el de música).',
+          'Tenés que escuchar el tono y sentir vibración. '
+          'Subí el volumen de NOTIFICACIONES (no Alarma) y sacá '
+          'el celular de silencio o vibrar.',
         ),
         actions: [
           FilledButton(

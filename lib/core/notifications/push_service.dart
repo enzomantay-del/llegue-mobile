@@ -6,7 +6,7 @@ import 'local_alerts.dart';
 /// El código cliente se activa cuando esté google-services.json + paquetes Firebase.
 /// Mientras tanto no rompe el build; el servidor ya soporta FCM (ver FIREBASE-SETUP.txt).
 /// Cuando se cablee FCM, usar los mismos canales Android que LocalAlerts
-/// (`llegue_alerts_v5` / `llegue_siren_v5`, stream ALARMA).
+/// (`llegue_alerts_v6` / `llegue_siren_v6`, stream NOTIFICACIÓN + raw llegue_alert).
 class PushService {
   PushService({required this.alerts});
 

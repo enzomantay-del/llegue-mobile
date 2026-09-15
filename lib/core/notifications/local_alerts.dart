@@ -12,16 +12,24 @@ class LocalAlerts {
   bool _listeningShown = false;
   int _id = 100;
 
-  /// Canal nuevo: Android no deja cambiar el volumen/sonido de un canal viejo.
-  /// v5 = stream de ALARMA + tono de alarma del sistema (no el de multimedia).
-  static const _alertsChannel = 'llegue_alerts_v5';
-  static const _sirenChannel = 'llegue_siren_v5';
+  /// Android congela sonido/volumen del canal al crearlo.
+  /// v5 usaba USAGE_ALARM + URI de alarma: vibraba y no sonaba si el usuario
+  /// subía Notificaciones (no Alarma), o si el URI no resolvía.
+  /// v6 = stream de NOTIFICACIÓN + WAV en res/raw. Volumen a subir: Notificaciones.
+  /// Si un APK viejo ya creó v5, hay que desinstalar una vez o dejar que init
+  /// borre v4/v5; los avisos nuevos van a v6.
+  static const _alertsChannel = 'llegue_alerts_v6';
+  static const _sirenChannel = 'llegue_siren_v6';
   static const _listeningChannel = 'llegue_listening_v1';
 
-  /// Tono nativo de alarma del celular (RingtoneManager.TYPE_ALARM).
-  static const _alarmSound = UriAndroidNotificationSound(
-    'content://settings/system/alarm_alert',
-  );
+  static const _alertSound = RawResourceAndroidNotificationSound('llegue_alert');
+
+  static const _staleChannelIds = [
+    'llegue_alerts_v4',
+    'llegue_siren_v4',
+    'llegue_alerts_v5',
+    'llegue_siren_v5',
+  ];
 
   Future<void> init() async {
     if (_ready) return;
@@ -45,16 +53,22 @@ class LocalAlerts {
       await androidPlugin?.requestFullScreenIntentPermission();
     } catch (_) {}
 
+    for (final id in _staleChannelIds) {
+      try {
+        await androidPlugin?.deleteNotificationChannel(channelId: id);
+      } catch (_) {}
+    }
+
     await androidPlugin?.createNotificationChannel(
       AndroidNotificationChannel(
         _alertsChannel,
         'Avisos de familia',
-        description: 'Llegadas, salidas y novedades (volumen de alarma)',
+        description: 'Llegadas, salidas y novedades (volumen de notificaciones)',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-        sound: _alarmSound,
+        audioAttributesUsage: AudioAttributesUsage.notification,
+        sound: _alertSound,
         vibrationPattern: Int64List.fromList([0, 250, 120, 250]),
       ),
     );
@@ -62,14 +76,13 @@ class LocalAlerts {
       AndroidNotificationChannel(
         _sirenChannel,
         'Alarmas Llegué',
-        description: 'Ayuda, app cerrada y avisos fuertes',
+        description: 'Ayuda, app cerrada y avisos fuertes (volumen de notificaciones)',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
         enableLights: true,
-        // Volumen de ALARMA del celular (no el de música / multimedia).
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-        sound: _alarmSound,
+        audioAttributesUsage: AudioAttributesUsage.notification,
+        sound: _alertSound,
         vibrationPattern: Int64List.fromList([0, 600, 200, 600, 200, 800]),
       ),
     );
@@ -102,17 +115,19 @@ class LocalAlerts {
           urgent ? _sirenChannel : _alertsChannel,
           urgent ? 'Alarmas Llegué' : 'Avisos de familia',
           channelDescription: urgent
-              ? 'Ayuda, app cerrada y avisos fuertes'
-              : 'Llegadas, salidas y novedades (volumen de alarma)',
+              ? 'Ayuda, app cerrada y avisos fuertes (volumen de notificaciones)'
+              : 'Llegadas, salidas y novedades (volumen de notificaciones)',
           importance: Importance.max,
           priority: Priority.max,
           playSound: true,
           enableVibration: true,
           enableLights: urgent,
           fullScreenIntent: urgent,
-          category: AndroidNotificationCategory.alarm,
-          audioAttributesUsage: AudioAttributesUsage.alarm,
-          sound: _alarmSound,
+          category: urgent
+              ? AndroidNotificationCategory.alarm
+              : AndroidNotificationCategory.message,
+          audioAttributesUsage: AudioAttributesUsage.notification,
+          sound: _alertSound,
           vibrationPattern: urgent
               ? Int64List.fromList([0, 600, 200, 600, 200, 800, 200, 1000])
               : Int64List.fromList([0, 250, 120, 250]),
@@ -127,9 +142,8 @@ class LocalAlerts {
           presentBanner: true,
           presentSound: true,
           presentList: true,
-          // iOS no usa stream de alarma. Critical Alerts (volumen máximo
-          // incluso en silencio) requiere entitlement de Apple; sin eso el
-          // sistema degrada a timeSensitive / sonido de notificación.
+          // iOS no usa stream de alarma. Critical Alerts requiere entitlement
+          // de Apple; sin eso el sistema degrada a timeSensitive.
           interruptionLevel: urgent
               ? InterruptionLevel.critical
               : InterruptionLevel.timeSensitive,
@@ -139,12 +153,12 @@ class LocalAlerts {
     );
   }
 
-  /// Prueba fuerte: aviso urgente + vibración (confianza del adulto).
+  /// Prueba fuerte: aviso urgente + sonido + vibración (confianza del adulto).
   Future<void> showTestAlarm() async {
     await show(
       title: 'Llegué — prueba de alarma',
       body:
-          'Si el sonido es bajo, subí el volumen de ALARMA del celular (no solo multimedia).',
+          'Si no suena, subí el volumen de NOTIFICACIONES y sacá el celular de silencio o vibrar.',
       urgent: true,
     );
     for (var i = 0; i < 8; i++) {
