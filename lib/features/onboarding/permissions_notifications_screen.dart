@@ -67,25 +67,43 @@ class _PermissionsNotificationsScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Para enterarte cuando tu hijo/a llega, sale o pide ayuda, '
-                  'activá los avisos de este celular.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontSize: 17,
-                        height: 1.4,
-                      ),
-                ),
-                const SizedBox(height: 16),
                 Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppColors.brand.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Text(
-                    'Cuando el celular pregunte, tocá “Permitir”.\n\n'
-                    'Sin esto, no vas a ver los avisos a tiempo.',
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  decoration: appGlassDecoration(radius: 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Para enterarte cuando tu hijo/a llega, sale o pide ayuda, '
+                        'activá los avisos de este celular.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              fontSize: 16,
+                              height: 1.35,
+                            ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Cuando el celular pregunte, tocá “Permitir”.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              height: 1.3,
+                            ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Sin esto, no vas a ver los avisos a tiempo.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.88),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              height: 1.3,
+                            ),
+                      ),
+                    ],
                   ),
                 ),
                 const Spacer(),

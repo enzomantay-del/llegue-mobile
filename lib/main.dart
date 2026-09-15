@@ -9,6 +9,7 @@ import 'core/invite_links.dart';
 import 'core/state/app_controller.dart';
 import 'core/theme/app_theme.dart';
 import 'features/family_circle/home_screen.dart';
+import 'features/family_circle/kid_offline_help_screen.dart';
 import 'features/family_setup/create_family_screen.dart';
 import 'features/family_setup/join_family_screen.dart';
 import 'features/legal/terms_screen.dart';
@@ -70,6 +71,10 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.controller.alerts.onSelected = _onNotificationPayload;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_openLaunchNotification());
+    });
     try {
       _sub = AppLinks().uriLinkStream.listen((uri) async {
         final token = inviteTokenFromUri(uri);
@@ -85,8 +90,25 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  Future<void> _openLaunchNotification() async {
+    final payload = await widget.controller.alerts.consumeLaunchPayload();
+    if (payload != null) _onNotificationPayload(payload);
+  }
+
+  void _onNotificationPayload(String payload) {
+    final info = widget.controller.kidOfflineFromPayload(payload);
+    if (info == null) return;
+    navigatorKey.currentState?.pushNamed(
+      KidOfflineHelpScreen.route,
+      arguments: info,
+    );
+  }
+
   @override
   void dispose() {
+    if (widget.controller.alerts.onSelected == _onNotificationPayload) {
+      widget.controller.alerts.onSelected = null;
+    }
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     super.dispose();
@@ -123,6 +145,7 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
               const PermissionsBlockedScreen(),
           SetupChecklistScreen.route: (_) => const SetupChecklistScreen(),
           HomeScreen.route: (_) => const HomeScreen(),
+          KidOfflineHelpScreen.route: (_) => const KidOfflineHelpScreen(),
           PlacesScreen.route: (_) => const PlacesScreen(),
           RoutinesScreen.route: (_) => const RoutinesScreen(),
           AlertPrefsScreen.route: (_) => const AlertPrefsScreen(),

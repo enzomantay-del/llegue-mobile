@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Llegué usa tu ubicación para avisar a tu familia cuando llegás o salís de Casa, Colegio u otros lugares.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
