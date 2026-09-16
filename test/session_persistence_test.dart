@@ -307,6 +307,62 @@ void main() {
     );
   });
 
+  test('refresh 404 no mata sesión: sigue con /auth/me', () async {
+    final api = FakeApiClient()
+      ..refreshError = ApiException('No encontrado', statusCode: 404)
+      ..meBody = {'user': _user(), 'family': _family()}
+      ..familyBody = {
+        'family': _family(),
+        'members': [_user()],
+        'places': _places(),
+      };
+    final expired = _jwt(
+      exp: DateTime.now().toUtc().subtract(const Duration(hours: 3)),
+    );
+    final app = await _controllerWithSavedSession(
+      api: api,
+      accessToken: expired,
+    );
+    await app.reconcileSessionWithServer();
+
+    expect(api.refreshCalls, 1);
+    expect(api.meCalls, greaterThanOrEqualTo(1));
+    expect(app.isLoggedIn, isTrue);
+    expect(app.hasFamily, isTrue);
+  });
+
+  test('inviteErrorMessage: adulto con 403 confuso pide re-login', () async {
+    final app = await _controllerWithSavedSession(api: FakeApiClient());
+    expect(app.isAdult, isTrue);
+    final msg = app.inviteErrorMessage(
+      ApiException('Solo un adulto de la familia puede invitar.', statusCode: 403),
+    );
+    expect(msg.toLowerCase(), contains('sesión'));
+  });
+
+  test('inviteErrorMessage: menor ve mensaje de menores', () async {
+    final api = FakeApiClient();
+    final store = SessionStore();
+    SharedPreferences.setMockInitialValues({});
+    await store.saveAuth(
+      accessToken: 'a',
+      refreshToken: 'r',
+      user: {
+        'id': 'k1',
+        'role': 'kid',
+        'name': 'Mateo',
+        'familyId': 'f1',
+      },
+      family: _family(),
+    );
+    final app = AppController(api: api, store: store, alerts: SilentAlerts());
+    await app.restorePersistedSession();
+    final msg = app.inviteErrorMessage(
+      ApiException('Solo un adulto de la familia puede invitar.', statusCode: 403),
+    );
+    expect(msg.toLowerCase(), contains('menores'));
+  });
+
   test('OTP de desarrollo no se toca en el cliente', () {
     // El código 123456 vive en el server (otpDevCode). El APK no debe
     // hardcodearlo ni cambiar el verify.

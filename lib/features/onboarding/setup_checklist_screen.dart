@@ -184,8 +184,10 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
       await _refresh();
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+        final app = context.read<AppController>();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(app.inviteErrorMessage(e))),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);

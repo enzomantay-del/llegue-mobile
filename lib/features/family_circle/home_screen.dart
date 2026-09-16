@@ -77,6 +77,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _invite() async {
+    final app = context.read<AppController>();
+    if (app.isKid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Los menores no pueden invitar. Pedile a un adulto de la familia.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!app.isAdult) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tu sesión no es de adulto. Cerrá sesión y volvé a entrar.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final nameCtrl = TextEditingController();
     var role = 'adult';
     final pinCtrl = TextEditingController();
@@ -255,8 +277,9 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } on ApiException catch (e) {
       if (!mounted) return;
+      final app = context.read<AppController>();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
+        SnackBar(content: Text(app.inviteErrorMessage(e))),
       );
     }
   }
@@ -709,8 +732,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(height: 24),
                             if (app.isKid)
                               ..._buildKidHome(app)
+                            else if (app.isAdult)
+                              ..._buildAdultHome(app)
                             else
-                              ..._buildAdultHome(app),
+                              ..._buildSessionRoleProblem(app),
                           ],
                         ),
                       ),
@@ -727,6 +752,46 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  List<Widget> _buildSessionRoleProblem(AppController app) {
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(22, 30, 22, 28),
+        decoration: appGlassDecoration(radius: 22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Tu sesión no es de adulto',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Para invitar a la familia tenés que entrar con una cuenta de adulto. '
+              'Cerrá sesión y volvé a entrar.',
+              style: GoogleFonts.dmSans(
+                color: Colors.white.withValues(alpha: 0.82),
+                fontSize: 15,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 22),
+            _PrimaryButton(
+              label: 'Ir a ajustes',
+              onPressed: () =>
+                  Navigator.of(context).pushNamed(SettingsHubScreen.route),
+            ),
+          ],
+        ),
+      ),
+    ];
   }
 
   List<Widget> _buildAdultHome(AppController app) {
