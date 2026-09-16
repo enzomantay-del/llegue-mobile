@@ -199,7 +199,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final app = context.read<AppController>();
     try {
       final data = await app.createInvitation(
         name: name,
@@ -277,7 +276,6 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } on ApiException catch (e) {
       if (!mounted) return;
-      final app = context.read<AppController>();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(app.inviteErrorMessage(e))),
       );
