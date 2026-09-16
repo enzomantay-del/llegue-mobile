@@ -4,8 +4,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiException implements Exception {
-  ApiException(this.message);
+  ApiException(this.message, {this.statusCode});
   final String message;
+  final int? statusCode;
+
+  bool get isUnauthorized => statusCode == 401;
 
   @override
   String toString() => message;
@@ -22,6 +25,15 @@ class ApiClient {
 
   String baseUrl;
   String? accessToken;
+  String? refreshToken;
+  Future<void> Function(
+    String accessToken,
+    String refreshToken,
+    Map<String, dynamic> user,
+  )?
+  onTokensRefreshed;
+
+  Future<Map<String, dynamic>>? _refreshing;
 
   Uri _u(String path) {
     final base = baseUrl.replaceAll(RegExp(r'/$'), '');
@@ -56,8 +68,104 @@ class ApiClient {
     }
   }
 
-  Future<http.Response> _postJson(String path, Map<String, dynamic> body,
-      {bool auth = false}) async {
+  /// Reintenta una vez si el access token venció. Un fallo de red en el
+  /// refresh NO se convierte en 401 (no hay que borrar la sesión).
+  Future<http.Response> _sendAuth(Future<http.Response> Function() send) async {
+    final res = await _send(send());
+    if (res.statusCode != 401) return res;
+    try {
+      await refreshSession();
+    } on ApiException catch (e) {
+      if (e.isUnauthorized) return res;
+      rethrow;
+    } catch (_) {
+      throw ApiException(
+        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
+      );
+    }
+    return _send(send());
+  }
+
+  bool get accessTokenNearExpiry {
+    final token = accessToken;
+    if (token == null || token.isEmpty) return true;
+    final exp = _jwtExpiry(token);
+    if (exp == null) return false;
+    return DateTime.now().toUtc().isAfter(
+      exp.subtract(const Duration(minutes: 2)),
+    );
+  }
+
+  DateTime? _jwtExpiry(String token) {
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    try {
+      final payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final map = jsonDecode(payload);
+      if (map is! Map) return null;
+      final exp = map['exp'];
+      if (exp is int) {
+        return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+      }
+      if (exp is num) {
+        return DateTime.fromMillisecondsSinceEpoch(
+          (exp * 1000).round(),
+          isUtc: true,
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<Map<String, dynamic>> refreshSession() {
+    final existing = _refreshing;
+    if (existing != null) return existing;
+    final future = _refreshSessionOnce();
+    _refreshing = future;
+    return future.whenComplete(() {
+      if (identical(_refreshing, future)) {
+        _refreshing = null;
+      }
+    });
+  }
+
+  Future<Map<String, dynamic>> _refreshSessionOnce() async {
+    final token = refreshToken;
+    if (token == null || token.isEmpty) {
+      throw ApiException('Tenés que iniciar sesión.', statusCode: 401);
+    }
+    final res = await _send(
+      http.post(
+        _u('/auth/refresh'),
+        headers: _headers(),
+        body: jsonEncode({'refreshToken': token}),
+      ),
+    );
+    final data = await _json(res, fallback: 'Sesión vencida.');
+    final nextAccess = data['accessToken'] as String?;
+    final nextRefresh = data['refreshToken'] as String? ?? token;
+    if (nextAccess == null || nextAccess.isEmpty) {
+      throw ApiException('Sesión vencida.', statusCode: 401);
+    }
+    accessToken = nextAccess;
+    refreshToken = nextRefresh;
+    final user = data['user'] is Map
+        ? Map<String, dynamic>.from(data['user'] as Map)
+        : <String, dynamic>{};
+    final cb = onTokensRefreshed;
+    if (cb != null) {
+      await cb(nextAccess, nextRefresh, user);
+    }
+    return data;
+  }
+
+  Future<http.Response> _postJson(
+    String path,
+    Map<String, dynamic> body, {
+    bool auth = false,
+  }) async {
     Future<http.Response> once(String root) {
       final base = root.replaceAll(RegExp(r'/$'), '');
       return http.post(
@@ -95,7 +203,10 @@ class ApiClient {
       if (decoded is Map<String, dynamic>) body = decoded;
     }
     if (res.statusCode >= 400) {
-      throw ApiException(body['error'] as String? ?? fallback);
+      throw ApiException(
+        body['error'] as String? ?? fallback,
+        statusCode: res.statusCode,
+      );
     }
     return body;
   }
@@ -106,11 +217,13 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> requestEmailOtp(String email) async {
-    final res = await _send(http.post(
-      _u('/auth/request-email-otp'),
-      headers: _headers(),
-      body: jsonEncode({'email': email}),
-    ));
+    final res = await _send(
+      http.post(
+        _u('/auth/request-email-otp'),
+        headers: _headers(),
+        body: jsonEncode({'email': email}),
+      ),
+    );
     return _json(res);
   }
 
@@ -124,20 +237,22 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(http.post(
-      _u('/auth/register-titular'),
-      headers: _headers(),
-      body: jsonEncode({
-        'name': name,
-        if (birthDate != null) 'birthDate': birthDate,
-        'email': email,
-        'emailCode': emailCode,
-        'phone': phone,
-        'phoneCode': phoneCode,
-        'installId': installId,
-        'platform': platform,
-      }),
-    ));
+    final res = await _send(
+      http.post(
+        _u('/auth/register-titular'),
+        headers: _headers(),
+        body: jsonEncode({
+          'name': name,
+          if (birthDate != null) 'birthDate': birthDate,
+          'email': email,
+          'emailCode': emailCode,
+          'phone': phone,
+          'phoneCode': phoneCode,
+          'installId': installId,
+          'platform': platform,
+        }),
+      ),
+    );
     return _json(res, fallback: 'No pudimos crear la cuenta.');
   }
 
@@ -148,17 +263,19 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(http.post(
-      _u('/auth/verify-otp'),
-      headers: _headers(),
-      body: jsonEncode({
-        'phone': phone,
-        'code': code,
-        'installId': installId,
-        'platform': platform,
-        if (name != null) 'name': name,
-      }),
-    ));
+    final res = await _send(
+      http.post(
+        _u('/auth/verify-otp'),
+        headers: _headers(),
+        body: jsonEncode({
+          'phone': phone,
+          'code': code,
+          'installId': installId,
+          'platform': platform,
+          if (name != null) 'name': name,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -168,36 +285,40 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(http.post(
-      _u('/auth/login-with-pin'),
-      headers: _headers(),
-      body: jsonEncode({
-        'inviteTokenOrCode': inviteTokenOrCode,
-        'pin': pin,
-        'installId': installId,
-        'platform': platform,
-      }),
-    ));
+    final res = await _send(
+      http.post(
+        _u('/auth/login-with-pin'),
+        headers: _headers(),
+        body: jsonEncode({
+          'inviteTokenOrCode': inviteTokenOrCode,
+          'pin': pin,
+          'installId': installId,
+          'platform': platform,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> lookupInstall(String installId) async {
-    final res = await _send(http.get(
-      _u('/devices/lookup?installId=${Uri.encodeComponent(installId)}'),
-    ));
+    final res = await _send(
+      http.get(
+        _u('/devices/lookup?installId=${Uri.encodeComponent(installId)}'),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> me() async {
-    final res = await _send(
-      http.get(_u('/auth/me'), headers: _headers(auth: true)),
+    final res = await _sendAuth(
+      () => http.get(_u('/auth/me'), headers: _headers(auth: true)),
     );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> getAccountProfile() async {
-    final res = await _send(
-      http.get(_u('/account/profile'), headers: _headers(auth: true)),
+    final res = await _sendAuth(
+      () => http.get(_u('/account/profile'), headers: _headers(auth: true)),
     );
     return _json(res);
   }
@@ -205,11 +326,13 @@ class ApiClient {
   Future<Map<String, dynamic>> updateAccountProfile(
     Map<String, dynamic> body,
   ) async {
-    final res = await _send(http.patch(
-      _u('/account/profile'),
-      headers: _headers(auth: true),
-      body: jsonEncode(body),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/account/profile'),
+        headers: _headers(auth: true),
+        body: jsonEncode(body),
+      ),
+    );
     return _json(res);
   }
 
@@ -220,17 +343,19 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(http.post(
-      _u('/families'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'name': name,
-        'relationshipLabel': relationshipLabel,
-        'displayName': displayName,
-        'installId': installId,
-        'platform': platform,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/families'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'name': name,
+          'relationshipLabel': relationshipLabel,
+          'displayName': displayName,
+          'installId': installId,
+          'platform': platform,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -240,17 +365,19 @@ class ApiClient {
     String? pin,
     String? publicBaseUrl,
   }) async {
-    final res = await _send(http.post(
-      _u('/invitations'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'name': name,
-        'role': role,
-        if (pin != null && pin.isNotEmpty) 'pin': pin,
-        if (publicBaseUrl != null && publicBaseUrl.isNotEmpty)
-          'publicBaseUrl': publicBaseUrl,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/invitations'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'name': name,
+          'role': role,
+          if (pin != null && pin.isNotEmpty) 'pin': pin,
+          if (publicBaseUrl != null && publicBaseUrl.isNotEmpty)
+            'publicBaseUrl': publicBaseUrl,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -265,15 +392,17 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(http.post(
-      _u('/invitations/$token/accept'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'installId': installId,
-        'platform': platform,
-        if (pin != null && pin.isNotEmpty) 'pin': pin,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/invitations/$token/accept'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'installId': installId,
+          'platform': platform,
+          if (pin != null && pin.isNotEmpty) 'pin': pin,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -282,15 +411,17 @@ class ApiClient {
     required String installId,
     String? pushToken,
   }) async {
-    final res = await _send(http.post(
-      _u('/devices/register'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'platform': platform,
-        'installId': installId,
-        if (pushToken != null) 'pushToken': pushToken,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/devices/register'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'platform': platform,
+          'installId': installId,
+          if (pushToken != null) 'pushToken': pushToken,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -300,16 +431,18 @@ class ApiClient {
     String? deviceId,
     bool? locationOk,
   }) async {
-    final res = await _send(http.patch(
-      _u('/devices/me/permissions'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'locationPermission': locationPermission,
-        'notificationsPermission': notificationsPermission,
-        if (deviceId != null) 'deviceId': deviceId,
-        if (locationOk != null) 'locationOk': locationOk,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/devices/me/permissions'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'locationPermission': locationPermission,
+          'notificationsPermission': notificationsPermission,
+          if (deviceId != null) 'deviceId': deviceId,
+          if (locationOk != null) 'locationOk': locationOk,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -317,14 +450,16 @@ class ApiClient {
     required int batteryLevel,
     String? deviceId,
   }) async {
-    final res = await _send(http.patch(
-      _u('/devices/me/battery'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'batteryLevel': batteryLevel,
-        if (deviceId != null) 'deviceId': deviceId,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/devices/me/battery'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'batteryLevel': batteryLevel,
+          if (deviceId != null) 'deviceId': deviceId,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -333,32 +468,32 @@ class ApiClient {
     String? deviceId,
     bool immediate = false,
   }) async {
-    final res = await _send(http.patch(
-      _u('/devices/me/presence'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'state': state,
-        'immediate': immediate,
-        if (deviceId != null) 'deviceId': deviceId,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/devices/me/presence'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'state': state,
+          'immediate': immediate,
+          if (deviceId != null) 'deviceId': deviceId,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> familyStatus() async {
-    final res = await _send(http.get(
-      _u('/family/status'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/family/status'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> listPlaces({bool includePending = false}) async {
     final q = includePending ? '?includePending=1' : '';
-    final res = await _send(http.get(
-      _u('/places$q'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/places$q'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
@@ -369,17 +504,19 @@ class ApiClient {
     String type = 'favorite',
     int radiusM = 60,
   }) async {
-    final res = await _send(http.post(
-      _u('/places'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'name': name,
-        'lat': lat,
-        'lng': lng,
-        'type': type,
-        'radiusM': radiusM,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/places'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'name': name,
+          'lat': lat,
+          'lng': lng,
+          'type': type,
+          'radiusM': radiusM,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -388,28 +525,31 @@ class ApiClient {
     required double lat,
     required double lng,
   }) async {
-    final res = await _send(http.post(
-      _u('/places/suggest'),
-      headers: _headers(auth: true),
-      body: jsonEncode({'name': name, 'lat': lat, 'lng': lng}),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/places/suggest'),
+        headers: _headers(auth: true),
+        body: jsonEncode({'name': name, 'lat': lat, 'lng': lng}),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> approvePlace(String placeId) async {
-    final res = await _send(http.post(
-      _u('/places/$placeId/approve'),
-      headers: _headers(auth: true),
-      body: '{}',
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/places/$placeId/approve'),
+        headers: _headers(auth: true),
+        body: '{}',
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> deletePlace(String placeId) async {
-    final res = await _send(http.delete(
-      _u('/places/$placeId'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.delete(_u('/places/$placeId'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
@@ -421,26 +561,27 @@ class ApiClient {
     String type = 'favorite',
     int radiusM = 60,
   }) async {
-    final res = await _send(http.patch(
-      _u('/places/$placeId'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'name': name,
-        'lat': lat,
-        'lng': lng,
-        'type': type,
-        'radiusM': radiusM,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/places/$placeId'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'name': name,
+          'lat': lat,
+          'lng': lng,
+          'type': type,
+          'radiusM': radiusM,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> listRoutines({String? kidId}) async {
     final q = kidId != null ? '?kidId=$kidId' : '';
-    final res = await _send(http.get(
-      _u('/routines$q'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/routines$q'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
@@ -452,26 +593,30 @@ class ApiClient {
     required String startTime,
     required String endTime,
   }) async {
-    final res = await _send(http.post(
-      _u('/routines'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'kidId': kidId,
-        'placeId': placeId,
-        'label': label,
-        'daysOfWeek': daysOfWeek,
-        'startTime': startTime,
-        'endTime': endTime,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/routines'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'kidId': kidId,
+          'placeId': placeId,
+          'label': label,
+          'daysOfWeek': daysOfWeek,
+          'startTime': startTime,
+          'endTime': endTime,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> deleteRoutine(String routineId) async {
-    final res = await _send(http.delete(
-      _u('/routines/$routineId'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.delete(
+        _u('/routines/$routineId'),
+        headers: _headers(auth: true),
+      ),
+    );
     return _json(res);
   }
 
@@ -484,44 +629,46 @@ class ApiClient {
     required String startTime,
     required String endTime,
   }) async {
-    final res = await _send(http.patch(
-      _u('/routines/$routineId'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'kidId': kidId,
-        'placeId': placeId,
-        'label': label,
-        'daysOfWeek': daysOfWeek,
-        'startTime': startTime,
-        'endTime': endTime,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/routines/$routineId'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'kidId': kidId,
+          'placeId': placeId,
+          'label': label,
+          'daysOfWeek': daysOfWeek,
+          'startTime': startTime,
+          'endTime': endTime,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> getAlertPrefs() async {
-    final res = await _send(http.get(
-      _u('/alert-prefs'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/alert-prefs'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> putAlertPrefs(Map<String, bool> prefs) async {
-    final res = await _send(http.put(
-      _u('/alert-prefs'),
-      headers: _headers(auth: true),
-      body: jsonEncode({'prefs': prefs}),
-    ));
+    final res = await _sendAuth(
+      () => http.put(
+        _u('/alert-prefs'),
+        headers: _headers(auth: true),
+        body: jsonEncode({'prefs': prefs}),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> activeTrip({String? kidId}) async {
     final q = kidId != null ? '?kidId=$kidId' : '';
-    final res = await _send(http.get(
-      _u('/trips/active$q'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/trips/active$q'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
@@ -534,19 +681,22 @@ class ApiClient {
     String? createdById,
     String? createdByName,
   }) async {
-    final res = await _send(http.post(
-      _u('/trips'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        if (kidId != null) 'kidId': kidId,
-        if (destinationPlaceId != null) 'destinationPlaceId': destinationPlaceId,
-        if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
-        if (kind != null) 'kind': kind,
-        if (forceNotify != null) 'forceNotify': forceNotify,
-        if (createdById != null) 'createdById': createdById,
-        if (createdByName != null) 'createdByName': createdByName,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/trips'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          if (kidId != null) 'kidId': kidId,
+          if (destinationPlaceId != null)
+            'destinationPlaceId': destinationPlaceId,
+          if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
+          if (kind != null) 'kind': kind,
+          if (forceNotify != null) 'forceNotify': forceNotify,
+          if (createdById != null) 'createdById': createdById,
+          if (createdByName != null) 'createdByName': createdByName,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -557,17 +707,19 @@ class ApiClient {
     String? expectedReturnAt,
     bool clearDestination = false,
   }) async {
-    final res = await _send(http.patch(
-      _u('/trips/$tripId'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        if (action != null) 'action': action,
-        if (clearDestination) 'destinationPlaceId': null,
-        if (!clearDestination && destinationPlaceId != null)
-          'destinationPlaceId': destinationPlaceId,
-        if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.patch(
+        _u('/trips/$tripId'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          if (action != null) 'action': action,
+          if (clearDestination) 'destinationPlaceId': null,
+          if (!clearDestination && destinationPlaceId != null)
+            'destinationPlaceId': destinationPlaceId,
+          if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
+        }),
+      ),
+    );
     return _json(res);
   }
 
@@ -579,35 +731,35 @@ class ApiClient {
     Map<String, dynamic>? payload,
     bool? forceNotify,
   }) async {
-    final res = await _send(http.post(
-      _u('/events'),
-      headers: _headers(auth: true),
-      body: jsonEncode({
-        'type': type,
-        if (kidId != null) 'kidId': kidId,
-        if (placeId != null) 'placeId': placeId,
-        if (tripId != null) 'tripId': tripId,
-        if (payload != null) 'payload': payload,
-        if (forceNotify != null) 'forceNotify': forceNotify,
-      }),
-    ));
+    final res = await _sendAuth(
+      () => http.post(
+        _u('/events'),
+        headers: _headers(auth: true),
+        body: jsonEncode({
+          'type': type,
+          if (kidId != null) 'kidId': kidId,
+          if (placeId != null) 'placeId': placeId,
+          if (tripId != null) 'tripId': tripId,
+          if (payload != null) 'payload': payload,
+          if (forceNotify != null) 'forceNotify': forceNotify,
+        }),
+      ),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> listEvents({String? kidId}) async {
     final q = kidId != null ? '?kidId=$kidId' : '';
-    final res = await _send(http.get(
-      _u('/events$q'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/events$q'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
   Future<Map<String, dynamic>> listMyNotifications() async {
-    final res = await _send(http.get(
-      _u('/notifications/me'),
-      headers: _headers(auth: true),
-    ));
+    final res = await _sendAuth(
+      () => http.get(_u('/notifications/me'), headers: _headers(auth: true)),
+    );
     return _json(res);
   }
 
