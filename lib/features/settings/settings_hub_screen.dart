@@ -127,7 +127,7 @@ class SettingsHubScreen extends StatelessWidget {
               _HubTile(
                 icon: Icons.help_outline_rounded,
                 title: 'Ayuda',
-                subtitle: 'Preguntas frecuentes y soporte',
+                subtitle: 'Preguntas frecuentes, probar alarma y soporte',
                 onTap: () => Navigator.of(context).pushNamed(HelpScreen.route),
               ),
               _HubTile(

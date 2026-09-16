@@ -11,9 +11,6 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/brand_mark.dart';
 import '../places/places_screen.dart';
 import '../routines/routines_screen.dart';
-import '../settings/alert_prefs_screen.dart';
-import '../settings/help_screen.dart';
-import '../settings/profile_screen.dart';
 import '../settings/settings_hub_screen.dart';
 import 'kid_offline_help_screen.dart';
 
@@ -539,30 +536,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _testAlerts() async {
-    final app = context.read<AppController>();
-    await app.alerts.showTestAlarm();
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Prueba de alarma'),
-        content: const Text(
-          'Tenés que escuchar el tono y sentir vibración. '
-          'Subí el volumen de NOTIFICACIONES (no Alarma) y sacá '
-          'el celular de silencio o vibrar.',
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Entendido'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _openAdultMenu() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -578,49 +551,129 @@ class _HomeScreenState extends State<HomeScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Text(
-                    'Más opciones',
+                    'Menú',
                     style: Theme.of(sheetContext).textTheme.titleLarge,
                   ),
                 ),
                 _MenuTile(
-                  icon: Icons.person_outline_rounded,
-                  label: 'Mi perfil',
+                  icon: Icons.home_rounded,
+                  label: 'Inicio',
+                  onTap: () => Navigator.pop(sheetContext),
+                ),
+                _MenuTile(
+                  icon: Icons.groups_rounded,
+                  label: 'Mi familia',
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    Navigator.of(context).pushNamed(ProfileScreen.route);
+                    _openMyFamily();
                   },
                 ),
                 _MenuTile(
-                  icon: Icons.help_outline_rounded,
-                  label: 'Ayuda',
+                  icon: Icons.place_rounded,
+                  label: 'Lugares',
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    Navigator.of(context).pushNamed(HelpScreen.route);
+                    Navigator.of(context).pushNamed(PlacesScreen.route);
+                  },
+                ),
+                _MenuTile(
+                  icon: Icons.calendar_month_rounded,
+                  label: 'Rutinas',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    Navigator.of(context).pushNamed(RoutinesScreen.route);
                   },
                 ),
                 _MenuTile(
                   icon: Icons.directions_walk_rounded,
-                  label: 'Salida especial de un hijo/a',
+                  label: 'Salida especial',
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _adultPickKidOuting();
                   },
                 ),
-                _MenuTile(
-                  icon: Icons.notifications_outlined,
-                  label: 'Qué avisos quiero recibir',
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    Navigator.of(context).pushNamed(AlertPrefsScreen.route);
-                  },
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Miembros de la familia + invitar (distinto de Inicio / avisos).
+  Future<void> _openMyFamily() async {
+    final app = context.read<AppController>();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final members = app.members;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    'Mi familia',
+                    style: Theme.of(sheetContext).textTheme.titleLarge,
+                  ),
                 ),
-                _MenuTile(
-                  icon: Icons.alarm_rounded,
-                  label: 'Probar la alarma',
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    _testAlerts();
-                  },
+                if (members.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    child: Text(
+                      'Todavía no hay nadie más. Invitá a tu hijo/a o a otro adulto.',
+                      style: GoogleFonts.dmSans(
+                        color: Colors.white.withValues(alpha: 0.8),
+                        height: 1.4,
+                      ),
+                    ),
+                  )
+                else
+                  for (final m in members)
+                    ListTile(
+                      leading: Icon(
+                        m['role'] == 'kid'
+                            ? Icons.child_care_rounded
+                            : Icons.person_outline_rounded,
+                        color: Colors.white,
+                      ),
+                      title: Text(
+                        m['name'] as String? ?? 'Sin nombre',
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        m['role'] == 'kid'
+                            ? 'Hijo/a'
+                            : (m['role'] == 'admin_adult'
+                                ? 'Titular'
+                                : 'Adulto/a'),
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _invite();
+                    },
+                    icon: const Icon(Icons.person_add_alt_1_rounded),
+                    label: Text(
+                      members.any((m) => m['role'] == 'kid')
+                          ? 'Invitar a alguien más'
+                          : 'Invitar hijo/a',
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -844,25 +897,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
       ],
       const SizedBox(height: 22),
-      _PrimaryButton(
-        label: 'Lugares de la familia',
-        onPressed: () => Navigator.of(context).pushNamed(PlacesScreen.route),
-      ),
-      const SizedBox(height: 10),
-      OutlinedButton(
-        onPressed: () => Navigator.of(context).pushNamed(RoutinesScreen.route),
-        child: const Text('Rutinas'),
-      ),
-      const SizedBox(height: 10),
-      TextButton(
-        onPressed: _invite,
-        child: Text(
-          'Invitar a alguien más',
-          style: GoogleFonts.dmSans(
-            color: Colors.white.withValues(alpha: 0.85),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+      _HomeShortcutsRow(
+        onPlaces: () => Navigator.of(context).pushNamed(PlacesScreen.route),
+        onRoutines: () => Navigator.of(context).pushNamed(RoutinesScreen.route),
+        onSpecial: _adultPickKidOuting,
       ),
       if (app.pendingPlaces.isNotEmpty) ...[
         const SizedBox(height: 18),
@@ -913,13 +951,23 @@ class _HomeScreenState extends State<HomeScreen> {
         }),
       ],
       const SizedBox(height: 28),
-      Text(
-        'Últimos avisos',
-        style: GoogleFonts.outfit(
-          color: Colors.white,
-          fontSize: 20,
-          fontWeight: FontWeight.w700,
-        ),
+      Row(
+        children: [
+          Icon(
+            Icons.notifications_outlined,
+            color: Colors.white.withValues(alpha: 0.9),
+            size: 22,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Últimos avisos',
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
       const SizedBox(height: 10),
       if (alerts.isEmpty)
@@ -951,16 +999,20 @@ class _HomeScreenState extends State<HomeScreen> {
             kidId: event?['kidId'] as String? ?? map['kidId'] as String?,
             event: event ?? map,
           );
+          final type = event?['type'] as String? ??
+              map['type'] as String? ??
+              map['title'] as String?;
           final offline = KidOfflineInfo.resolve(
             title: map['title'] as String?,
             body: raw,
-            type: event?['type'] as String? ?? map['type'] as String?,
+            type: type,
             kidId: event?['kidId'] as String? ?? map['kidId'] as String?,
             members: app.members,
           );
           return _AlertTile(
             body: body,
             when: map['createdAt'] as String?,
+            icon: _alertTypeIcon(type, body),
             onTap: offline == null
                 ? null
                 : () {
@@ -1396,10 +1448,124 @@ class _MenuTile extends StatelessWidget {
   }
 }
 
+class _HomeShortcutsRow extends StatelessWidget {
+  const _HomeShortcutsRow({
+    required this.onPlaces,
+    required this.onRoutines,
+    required this.onSpecial,
+  });
+
+  final VoidCallback onPlaces;
+  final VoidCallback onRoutines;
+  final VoidCallback onSpecial;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 360;
+        final tiles = [
+          _HomeShortcut(
+            icon: Icons.place_rounded,
+            label: 'Lugares de la familia',
+            onTap: onPlaces,
+          ),
+          _HomeShortcut(
+            icon: Icons.calendar_month_rounded,
+            label: 'Rutinas',
+            onTap: onRoutines,
+          ),
+          _HomeShortcut(
+            icon: Icons.directions_walk_rounded,
+            label: 'Salidas especiales',
+            onTap: onSpecial,
+          ),
+        ];
+        if (narrow) {
+          return Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: tiles[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: tiles[1]),
+                ],
+              ),
+              const SizedBox(height: 8),
+              tiles[2],
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (var i = 0; i < tiles.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              Expanded(child: tiles[i]),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _HomeShortcut extends StatelessWidget {
+  const _HomeShortcut({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+          decoration: appGlassDecoration(radius: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 26),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.dmSans(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AlertTile extends StatelessWidget {
-  const _AlertTile({required this.body, this.when, this.onTap});
+  const _AlertTile({
+    required this.body,
+    required this.icon,
+    this.when,
+    this.onTap,
+  });
 
   final String body;
+  final IconData icon;
   final String? when;
   final VoidCallback? onTap;
 
@@ -1414,31 +1580,47 @@ class _AlertTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             decoration: appGlassDecoration(),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  body,
-                  style: GoogleFonts.dmSans(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                    height: 1.3,
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    icon,
+                    size: 20,
+                    color: Colors.white.withValues(alpha: 0.85),
                   ),
                 ),
-                if (when != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    _friendlyTime(when!),
-                    style: GoogleFonts.dmSans(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                      color: Colors.white,
-                    ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        body,
+                        style: GoogleFonts.dmSans(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          height: 1.3,
+                        ),
+                      ),
+                      if (when != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _friendlyTime(when!),
+                          style: GoogleFonts.dmSans(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
+                ),
               ],
             ),
           ),
@@ -1446,6 +1628,42 @@ class _AlertTile extends StatelessWidget {
       ),
     );
   }
+}
+
+IconData _alertTypeIcon(String? type, String body) {
+  final t = (type ?? '').toLowerCase();
+  final b = body.toLowerCase();
+  if (t.contains('location_lost') ||
+      t.contains('stopped_sharing') ||
+      b.contains('dejó de compartir') ||
+      b.contains('ubicaci')) {
+    return Icons.location_off_rounded;
+  }
+  if (t.contains('battery') || b.contains('bater')) {
+    return Icons.battery_alert_rounded;
+  }
+  if (t.contains('going') ||
+      t.contains('special') ||
+      t.contains('trip') ||
+      b.contains('salida especial') ||
+      b.contains('armó una salida') ||
+      b.contains('armo una salida')) {
+    return Icons.directions_walk_rounded;
+  }
+  if (t.contains('arrival') ||
+      b.contains('llegó') ||
+      b.contains('llego') ||
+      b.contains('llegó a') ||
+      b.contains('en casa')) {
+    return Icons.place_rounded;
+  }
+  if (t.contains('departure') ||
+      b.contains('salió') ||
+      b.contains('salio') ||
+      b.contains('se fue')) {
+    return Icons.logout_rounded;
+  }
+  return Icons.notifications_outlined;
 }
 
 String _friendlyTime(String iso) {

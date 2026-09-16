@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
+import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
 import '../legal/terms_screen.dart';
@@ -58,6 +60,30 @@ class HelpScreen extends StatelessWidget {
           'El chat de soporte todavía no está disponible. '
           'Pronto lo vamos a activar acá.',
         ),
+      ),
+    );
+  }
+
+  Future<void> _testAlarm(BuildContext context) async {
+    final app = context.read<AppController>();
+    await app.alerts.showTestAlarm();
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Prueba de alarma'),
+        content: const Text(
+          'Tenés que escuchar el tono y sentir vibración. '
+          'Subí el volumen de NOTIFICACIONES (no Alarma) y sacá '
+          'el celular de silencio o vibrar.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
+          ),
+        ],
       ),
     );
   }
@@ -124,6 +150,36 @@ class HelpScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+              const SizedBox(height: 20),
+              Text(
+                'Probar',
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                decoration: appGlassDecoration(radius: 14),
+                child: ListTile(
+                  leading: const Icon(Icons.alarm_rounded, color: Colors.white),
+                  title: const Text(
+                    'Probar la alarma',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Comprobá sonido y vibración en este celular',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  onTap: () => _testAlarm(context),
+                ),
+              ),
               const SizedBox(height: 20),
               Text(
                 'Soporte',
