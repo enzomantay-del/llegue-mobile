@@ -24,11 +24,12 @@ class AppController extends ChangeNotifier {
     LocalAlerts? alerts,
     GeofenceMonitor? geofence,
     PushService? push,
-  })  : api = api ?? ApiClient(),
-        store = store ?? SessionStore(),
-        permissions = permissions ?? PermissionsService(),
-        alerts = alerts ?? LocalAlerts() {
-    this.geofence = geofence ??
+  }) : api = api ?? ApiClient(),
+       store = store ?? SessionStore(),
+       permissions = permissions ?? PermissionsService(),
+       alerts = alerts ?? LocalAlerts() {
+    this.geofence =
+        geofence ??
         GeofenceMonitor(
           onTransition: _onGeofenceTransition,
           onStatus: (status) {
@@ -37,6 +38,7 @@ class AppController extends ChangeNotifier {
           },
         );
     this.push = push ?? PushService(alerts: this.alerts);
+    this.api.onTokensRefreshed = _persistRefreshedTokens;
   }
 
   final ApiClient api;
@@ -96,7 +98,8 @@ class AppController extends ChangeNotifier {
   bool get isAdult =>
       user?['role'] == 'adult' || user?['role'] == 'admin_adult';
 
-  String get displayName => (user?['name'] as String?)?.trim().isNotEmpty == true
+  String get displayName =>
+      (user?['name'] as String?)?.trim().isNotEmpty == true
       ? user!['name'] as String
       : 'Sin nombre';
 
@@ -111,9 +114,23 @@ class AppController extends ChangeNotifier {
     api.baseUrl = ApiClient.defaultBaseUrl;
     await store.setBaseUrl(api.baseUrl);
 
+    await restorePersistedSession();
+    await refreshDeviceBinding();
+    await reconcileSessionWithServer();
+
+    bootstrapped = true;
+    notifyListeners();
+    await syncRuntimeServices();
+  }
+
+  /// Carga token/refresh/userId/familyId y lugares cacheados. No llama al server.
+  Future<void> restorePersistedSession() async {
     api.accessToken = await store.accessToken;
+    api.refreshToken = await store.refreshToken;
     user = await store.user;
     family = await store.family;
+    places = await store.places;
+    pendingPlaces = await store.pendingPlaces;
     permissionsReady = await store.permissionsReady;
     // null = app vieja: no empujar checklist. Solo false fuerza el flujo nuevo.
     setupChecklistDone = (await store.setupChecklistDoneFlag) ?? true;
@@ -121,28 +138,93 @@ class AppController extends ChangeNotifier {
     keepAliveOnboardingSeen = await store.keepAliveOnboardingSeen;
     pendingInviteToken = await store.pendingInvite;
 
-    await refreshDeviceBinding();
-
-    if (api.accessToken != null) {
-      try {
-        final me = await api.me();
-        user = Map<String, dynamic>.from(me['user'] as Map);
-        family = me['family'] == null
-            ? null
-            : Map<String, dynamic>.from(me['family'] as Map);
-        await store.saveUser(user!);
-        await store.saveFamily(family);
-        if (hasFamily) {
-          await refreshFamilyStatus();
+    final storedUserId = await store.userId;
+    final storedFamilyId = await store.familyId;
+    if (user != null && storedUserId != null && storedUserId.isNotEmpty) {
+      user!['id'] ??= storedUserId;
+    }
+    if (storedFamilyId != null && storedFamilyId.isNotEmpty) {
+      if (user != null) {
+        final existing = user!['familyId'] as String?;
+        if (existing == null || existing.isEmpty) {
+          user!['familyId'] = storedFamilyId;
         }
+      }
+      family ??= {'id': storedFamilyId};
+    }
+  }
+
+  /// Si hay token, confirma sesión contra /auth/me y /family/status.
+  /// Red caída: se queda la sesión local. 401 real / usuario inexistente: login.
+  Future<void> reconcileSessionWithServer() async {
+    final hasAccess = api.accessToken != null && api.accessToken!.isNotEmpty;
+    final hasRefresh = api.refreshToken != null && api.refreshToken!.isNotEmpty;
+    if (!hasAccess && !hasRefresh) return;
+
+    try {
+      if (hasRefresh && (!hasAccess || api.accessTokenNearExpiry)) {
+        await api.refreshSession();
+      }
+      await _applyMeAndFamilyStatus();
+    } on ApiException catch (e) {
+      if (e.isUnauthorized) {
+        await _recoverFromUnauthorized();
+      }
+    } catch (_) {
+      // Offline / timeout: no fingir cuenta nueva.
+    }
+  }
+
+  Future<void> _applyMeAndFamilyStatus() async {
+    final me = await api.me();
+    user = Map<String, dynamic>.from(me['user'] as Map);
+    family = me['family'] == null
+        ? null
+        : Map<String, dynamic>.from(me['family'] as Map);
+    await store.saveUser(user!);
+    await store.saveFamily(family);
+    if (!hasFamily) return;
+    try {
+      await refreshFamilyStatus();
+    } on ApiException catch (e) {
+      if (e.isUnauthorized) rethrow;
+      // Red: conservar lugares locales.
+    } catch (_) {}
+  }
+
+  Future<void> _recoverFromUnauthorized() async {
+    final hasRefresh = api.refreshToken != null && api.refreshToken!.isNotEmpty;
+    if (hasRefresh) {
+      try {
+        await api.refreshSession();
+        await _applyMeAndFamilyStatus();
+        return;
+      } on ApiException catch (e) {
+        if (!e.isUnauthorized) return;
       } catch (_) {
-        await logout();
+        return;
       }
     }
+    await logout();
+  }
 
-    bootstrapped = true;
-    notifyListeners();
-    await syncRuntimeServices();
+  Future<void> _persistRefreshedTokens(
+    String accessToken,
+    String refreshToken,
+    Map<String, dynamic> refreshedUser,
+  ) async {
+    api.accessToken = accessToken;
+    api.refreshToken = refreshToken;
+    if (refreshedUser.isNotEmpty) {
+      user = refreshedUser;
+    }
+    if (user == null) return;
+    await store.saveAuth(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      user: user!,
+      family: family,
+    );
   }
 
   Future<void> refreshDeviceBinding() async {
@@ -155,10 +237,7 @@ class AppController extends ChangeNotifier {
         boundUserName = u['name'] as String? ?? boundUserName;
         boundUserRole = u['role'] as String? ?? boundUserRole;
         boundUserPhone = u['phone'] as String?;
-        await store.setBoundIdentity(
-          name: boundUserName,
-          role: boundUserRole,
-        );
+        await store.setBoundIdentity(name: boundUserName, role: boundUserRole);
       } else {
         deviceBoundOnServer = false;
         boundUserName = null;
@@ -176,6 +255,7 @@ class AppController extends ChangeNotifier {
   Future<void> resetLocalInstall() async {
     await stopRuntimeServices();
     api.accessToken = null;
+    api.refreshToken = null;
     user = null;
     family = null;
     members = [];
@@ -468,6 +548,7 @@ class AppController extends ChangeNotifier {
     _syncGeofencePlaces();
     await _notifyNewAdultAlerts();
     await store.saveFamily(family);
+    await store.savePlaces(places, pendingPlaces: pendingPlaces);
     // Familia ya armada (seed): no forzar checklist
     if (isAdult &&
         hasFamily &&
@@ -613,14 +694,17 @@ class AppController extends ChangeNotifier {
         var body = n['body'] as String? ?? 'Hay un aviso nuevo';
         final iso = n['createdAt'] as String? ?? n['sentAt'] as String?;
         final clock = _formatClock(iso);
-        final eventTime = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
+        final eventTime = iso == null
+            ? null
+            : DateTime.tryParse(iso)?.toLocal();
         // Hora del hecho al frente, para que el padre se guíe aunque el aviso llegue tarde.
         if (clock != null && !body.contains(clock)) {
           body = '$clock · $body';
         }
         body = formatFamilyMessage(body);
         final lower = '${title.toLowerCase()} ${body.toLowerCase()}';
-        final urgent = lower.contains('ayuda') ||
+        final urgent =
+            lower.contains('ayuda') ||
             lower.contains('llegó') ||
             lower.contains('salió') ||
             lower.contains('regresa') ||
@@ -649,7 +733,8 @@ class AppController extends ChangeNotifier {
       _seenNotificationIds.add(id);
       final title = (n['title'] as String? ?? '').toLowerCase();
       final body = (n['body'] as String? ?? '').toLowerCase();
-      final allowed = title.contains('lugar') ||
+      final allowed =
+          title.contains('lugar') ||
           title.contains('salida') ||
           body.contains('acept') ||
           body.contains('armar') ||
@@ -968,6 +1053,7 @@ class AppController extends ChangeNotifier {
   Future<void> logout() async {
     await stopRuntimeServices();
     api.accessToken = null;
+    api.refreshToken = null;
     user = null;
     family = null;
     members = [];
@@ -987,6 +1073,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _applyAuth(Map<String, dynamic> data) async {
     api.accessToken = data['accessToken'] as String?;
+    api.refreshToken = data['refreshToken'] as String? ?? '';
     user = Map<String, dynamic>.from(data['user'] as Map);
     family = data['family'] == null
         ? null
@@ -1082,21 +1169,20 @@ class AppController extends ChangeNotifier {
     if (rawPayload is Map) {
       payload = Map<String, dynamic>.from(rawPayload);
     }
-    var id = OutingCopy.creatorIdFromTrip(trip) ??
+    var id =
+        OutingCopy.creatorIdFromTrip(trip) ??
         payload?['createdById'] as String? ??
         payload?['createdByUserId'] as String?;
-    var name = OutingCopy.creatorNameFromTrip(trip) ??
+    var name =
+        OutingCopy.creatorNameFromTrip(trip) ??
         payload?['createdByName'] as String?;
     if ((name ?? '').trim().isEmpty) name = null;
 
     if (id == null || name == null) {
       final adults = members
-          .where(
-            (m) => m['role'] == 'adult' || m['role'] == 'admin_adult',
-          )
+          .where((m) => m['role'] == 'adult' || m['role'] == 'admin_adult')
           .toList();
-      final titular =
-          adults.where((m) => m['role'] == 'admin_adult').toList();
+      final titular = adults.where((m) => m['role'] == 'admin_adult').toList();
       Map<String, dynamic>? guess;
       if (adults.length == 1) {
         guess = adults.first;
@@ -1110,11 +1196,7 @@ class AppController extends ChangeNotifier {
     }
 
     final viewerId = user?['id'] as String? ?? '';
-    return (
-      id: id,
-      name: name,
-      viewerCreated: id != null && id == viewerId,
-    );
+    return (id: id, name: name, viewerCreated: id != null && id == viewerId);
   }
 
   String formatFamilyMessage(
@@ -1125,9 +1207,8 @@ class AppController extends ChangeNotifier {
     Map<String, dynamic>? event,
   }) {
     if (!OutingCopy.looksLikeSpecialOutingCopy(raw)) return raw;
-    final resolvedKidId = kidId ??
-        event?['kidId'] as String? ??
-        trip?['kidId'] as String?;
+    final resolvedKidId =
+        kidId ?? event?['kidId'] as String? ?? trip?['kidId'] as String?;
     final resolvedTrip = trip ?? tripForKid(resolvedKidId);
     final creator = resolveOutingCreator(
       trip: resolvedTrip,

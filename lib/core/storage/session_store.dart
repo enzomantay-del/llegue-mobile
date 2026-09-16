@@ -7,6 +7,10 @@ class SessionStore {
   static const _refreshKey = 'refresh_token';
   static const _userKey = 'user_json';
   static const _familyKey = 'family_json';
+  static const _userIdKey = 'user_id';
+  static const _familyIdKey = 'family_id';
+  static const _placesKey = 'places_json';
+  static const _pendingPlacesKey = 'pending_places_json';
   static const _baseUrlKey = 'api_base_url';
   static const _deviceIdKey = 'device_id';
   static const _permissionsKey = 'permissions_ready';
@@ -30,6 +34,7 @@ class SessionStore {
     await p.setString(_accessKey, accessToken);
     await p.setString(_refreshKey, refreshToken);
     await p.setString(_userKey, jsonEncode(user));
+    await _writeUserIds(p, user: user, family: family);
     if (family != null) {
       await p.setString(_familyKey, jsonEncode(family));
     }
@@ -42,6 +47,7 @@ class SessionStore {
   Future<void> saveUser(Map<String, dynamic> user) async {
     final p = await _p;
     await p.setString(_userKey, jsonEncode(user));
+    await _writeUserIds(p, user: user);
     final name = user['name'] as String?;
     final role = user['role'] as String?;
     if (name != null) await p.setString(_boundNameKey, name);
@@ -52,13 +58,31 @@ class SessionStore {
     final p = await _p;
     if (family == null) {
       await p.remove(_familyKey);
+      await p.remove(_familyIdKey);
     } else {
       await p.setString(_familyKey, jsonEncode(family));
+      final id = family['id'] as String?;
+      if (id != null && id.isNotEmpty) {
+        await p.setString(_familyIdKey, id);
+      }
+    }
+  }
+
+  Future<void> savePlaces(
+    List<Map<String, dynamic>> places, {
+    List<Map<String, dynamic>>? pendingPlaces,
+  }) async {
+    final p = await _p;
+    await p.setString(_placesKey, jsonEncode(places));
+    if (pendingPlaces != null) {
+      await p.setString(_pendingPlacesKey, jsonEncode(pendingPlaces));
     }
   }
 
   Future<String?> get accessToken async => (await _p).getString(_accessKey);
   Future<String?> get refreshToken async => (await _p).getString(_refreshKey);
+  Future<String?> get userId async => (await _p).getString(_userIdKey);
+  Future<String?> get familyId async => (await _p).getString(_familyIdKey);
 
   Future<Map<String, dynamic>?> get user async {
     final raw = (await _p).getString(_userKey);
@@ -71,6 +95,12 @@ class SessionStore {
     if (raw == null) return null;
     return Map<String, dynamic>.from(jsonDecode(raw) as Map);
   }
+
+  Future<List<Map<String, dynamic>>> get places async =>
+      _decodeMapList((await _p).getString(_placesKey));
+
+  Future<List<Map<String, dynamic>>> get pendingPlaces async =>
+      _decodeMapList((await _p).getString(_pendingPlacesKey));
 
   Future<void> setBaseUrl(String url) async {
     await (await _p).setString(_baseUrlKey, url);
@@ -141,6 +171,10 @@ class SessionStore {
     await p.remove(_refreshKey);
     await p.remove(_userKey);
     await p.remove(_familyKey);
+    await p.remove(_userIdKey);
+    await p.remove(_familyIdKey);
+    await p.remove(_placesKey);
+    await p.remove(_pendingPlacesKey);
     await p.remove(_permissionsKey);
     await p.remove(_pendingInviteKey);
     await p.remove(_setupDoneKey);
@@ -219,4 +253,34 @@ class SessionStore {
 
   @Deprecated('Usar clearSession para no romper un-celular-un-rol')
   Future<void> clear() => clearSession();
+
+  Future<void> _writeUserIds(
+    SharedPreferences p, {
+    required Map<String, dynamic> user,
+    Map<String, dynamic>? family,
+  }) async {
+    final userId = user['id'] as String?;
+    if (userId != null && userId.isNotEmpty) {
+      await p.setString(_userIdKey, userId);
+    }
+    final familyId =
+        (family?['id'] as String?) ?? (user['familyId'] as String?);
+    if (familyId != null && familyId.isNotEmpty) {
+      await p.setString(_familyIdKey, familyId);
+    }
+  }
+
+  List<Map<String, dynamic>> _decodeMapList(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return [];
+      return decoded
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
 }
