@@ -163,7 +163,12 @@ class AppController extends ChangeNotifier {
 
     try {
       if (hasRefresh && (!hasAccess || api.accessTokenNearExpiry)) {
-        await api.refreshSession();
+        try {
+          await api.refreshSession();
+        } on ApiException catch (e) {
+          // Refresh caído (404 viejo) o red: seguir con /auth/me si el access aún sirve.
+          if (e.isUnauthorized) rethrow;
+        }
       }
       await _applyMeAndFamilyStatus();
     } on ApiException catch (e) {
@@ -173,6 +178,24 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       // Offline / timeout: no fingir cuenta nueva.
     }
+  }
+
+  /// Mensaje claro si el server rechaza invitar por rol/sesión (no el 403 genérico solo).
+  String inviteErrorMessage(ApiException e) {
+    if (e.isUnauthorized) {
+      return 'Tu sesión venció. Cerrá sesión y volvé a entrar como adulto.';
+    }
+    final msg = e.message;
+    final lower = msg.toLowerCase();
+    if (isAdult &&
+        (lower.contains('solo un adulto') || lower.contains('no es de adulto'))) {
+      return 'Tu sesión no es de adulto o quedó desfasada. '
+          'Cerrá sesión y volvé a entrar con tu cuenta de padre/madre.';
+    }
+    if (isKid || lower.contains('solo un adulto')) {
+      return 'Los menores no pueden invitar. Pedile a un adulto de la familia.';
+    }
+    return msg;
   }
 
   Future<void> _applyMeAndFamilyStatus() async {
