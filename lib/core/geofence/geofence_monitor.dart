@@ -205,12 +205,15 @@ class GeofenceMonitor {
       return;
     }
 
+    // Un solo lugar “activo”: el más cercano dentro del radio.
+    // Evita quedar “dentro de Casa” y de Plazoleta a la vez (solape de radios)
+    // y perder el ENTER al volver a Casa.
+    final scored = <({String id, Map<String, dynamic> place, double dist, double radius, bool inside})>[];
     for (final place in _places) {
       final id = place['id'] as String?;
       final lat = (place['lat'] as num?)?.toDouble();
       final lng = (place['lng'] as num?)?.toDouble();
       if (id == null || lat == null || lng == null) continue;
-
       final radius = ((place['radiusM'] as num?)?.toDouble() ?? 60).clamp(40, 500);
       final dist = Geolocator.distanceBetween(
         pos.latitude,
@@ -218,7 +221,24 @@ class GeofenceMonitor {
         lat,
         lng,
       );
-      final nowInside = dist <= radius;
+      scored.add((
+        id: id,
+        place: place,
+        dist: dist,
+        radius: radius.toDouble(),
+        inside: dist <= radius,
+      ));
+    }
+    if (scored.isEmpty) return;
+
+    String? primaryId;
+    final insides = scored.where((s) => s.inside).toList()
+      ..sort((a, b) => a.dist.compareTo(b.dist));
+    if (insides.isNotEmpty) primaryId = insides.first.id;
+
+    for (final s in scored) {
+      final id = s.id;
+      final nowInside = primaryId != null && id == primaryId;
 
       if (!_primed) {
         _inside[id] = nowInside;
@@ -233,7 +253,11 @@ class GeofenceMonitor {
       }
 
       final type = nowInside ? 'arrival' : 'departure';
-      final grace = nowInside ? enterGrace : exitGrace;
+      // Salida forzada por solape (entra a otro lugar más cerca): gracia más corta.
+      final overlapExit = !nowInside && wasInside && primaryId != null;
+      final grace = nowInside
+          ? enterGrace
+          : (overlapExit ? const Duration(seconds: 20) : exitGrace);
       final pending = _pendingType[id];
       if (pending != type) {
         _pendingType[id] = type;
@@ -255,7 +279,7 @@ class GeofenceMonitor {
         GeofenceTransition(
           type: type,
           placeId: id,
-          placeName: place['name'] as String? ?? 'Lugar',
+          placeName: s.place['name'] as String? ?? 'Lugar',
           lat: pos.latitude,
           lng: pos.longitude,
         ),
