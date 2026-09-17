@@ -1075,6 +1075,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       const SizedBox(height: 28),
       _PrimaryButton(
+        icon: Icons.home_rounded,
         label: 'Regreso a casa',
         height: 58,
         onPressed: () => _run(
@@ -1086,12 +1087,14 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       const SizedBox(height: 12),
       _PrimaryButton(
+        icon: Icons.directions_walk_rounded,
         label: 'Salida especial',
         height: 58,
         onPressed: () => _startOuting(),
       ),
       const SizedBox(height: 12),
       _PrimaryButton(
+        icon: Icons.add_location_alt_rounded,
         label: 'Sugerir un lugar',
         height: 58,
         onPressed: _suggestPlaceFromHome,
@@ -1174,12 +1177,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
       const SizedBox(height: 16),
       Center(
-        child: TextButton(
+        child: TextButton.icon(
           onPressed: () => Navigator.of(context).pushNamed(PlacesScreen.route),
           style: TextButton.styleFrom(
             foregroundColor: Colors.white.withValues(alpha: 0.85),
           ),
-          child: Text(
+          icon: const Icon(Icons.place_outlined, size: 18),
+          label: Text(
             'Ver lugares',
             style: GoogleFonts.dmSans(
               fontWeight: FontWeight.w600,
@@ -1190,13 +1194,14 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       const SizedBox(height: 8),
       Center(
-        child: TextButton(
+        child: TextButton.icon(
           onPressed: () =>
               Navigator.of(context).pushNamed(SettingsHubScreen.route),
           style: TextButton.styleFrom(
             foregroundColor: Colors.white.withValues(alpha: 0.85),
           ),
-          child: Text(
+          icon: const Icon(Icons.manage_accounts_rounded, size: 18),
+          label: Text(
             'Cuenta y ayuda',
             style: GoogleFonts.dmSans(
               fontWeight: FontWeight.w600,
@@ -1387,11 +1392,13 @@ class _PrimaryButton extends StatelessWidget {
   const _PrimaryButton({
     required this.label,
     required this.onPressed,
+    this.icon,
     this.height = 54,
   });
 
   final String label;
   final VoidCallback onPressed;
+  final IconData? icon;
   final double height;
 
   @override
@@ -1408,13 +1415,31 @@ class _PrimaryButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
           ),
         ),
-        child: Text(
-          label,
-          style: GoogleFonts.dmSans(
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
-        ),
+        child: icon == null
+            ? Text(
+                label,
+                style: GoogleFonts.dmSans(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 22),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.dmSans(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
