@@ -198,16 +198,98 @@ void main() {
     },
   );
 
-  test('401 real / usuario inexistente: va a login y limpia sesión', () async {
+  test('401 tras refresh fallido: NO limpia familia local (posible DB wipe)', () async {
     final api = FakeApiClient()
       ..meError = ApiException('Sesión inválida.', statusCode: 401)
       ..refreshError = ApiException('Sesión vencida.', statusCode: 401);
     final app = await _controllerWithSavedSession(api: api);
     await app.reconcileSessionWithServer();
 
+    expect(app.isLoggedIn, isTrue);
+    expect(app.hasFamily, isTrue);
+    expect(app.sessionValidationFailed, isTrue);
+    expect(app.startRoute, '/home');
+    expect(await app.store.accessToken, isNotNull);
+    expect(await app.store.familyId, 'f1');
+    expect(app.places.single['id'], 'p1');
+  });
+
+  test('5xx al arrancar: no logout, conserva sesión', () async {
+    final api = FakeApiClient()
+      ..meError = ApiException('Server error', statusCode: 503);
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
+
+    expect(app.isLoggedIn, isTrue);
+    expect(app.hasFamily, isTrue);
+    expect(app.sessionValidationFailed, isTrue);
+    expect(await app.store.familyId, 'f1');
+  });
+
+  test('logout explícito sí borra sesión', () async {
+    final api = FakeApiClient()
+      ..meError = ApiException('Sesión inválida.', statusCode: 401)
+      ..refreshError = ApiException('Sesión vencida.', statusCode: 401);
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
+    expect(app.sessionValidationFailed, isTrue);
+
+    await app.logout();
     expect(app.isLoggedIn, isFalse);
-    expect(app.startRoute, '/');
     expect(await app.store.accessToken, isNull);
+    expect(await app.store.familyId, isNull);
+  });
+
+  test('401 con refresh OK no limpia familia', () async {
+    final api = FakeApiClient()
+      ..failMeOnce = true
+      ..meBody = {'user': _user(), 'family': _family()}
+      ..familyBody = {
+        'family': _family(),
+        'members': [_user()],
+        'places': _places(),
+      };
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
+
+    expect(app.isLoggedIn, isTrue);
+    expect(app.hasFamily, isTrue);
+    expect(app.sessionValidationFailed, isFalse);
+    expect(app.startRoute, '/home');
+    expect(api.refreshCalls, greaterThanOrEqualTo(1));
+  });
+
+  test('prefs keys estables: no bump de claves por versionCode', () {
+    // Contratos de SessionStore: si cambian los nombres, se pierde la sesión
+    // al actualizar. Este test documenta las claves canónicas.
+    const keys = [
+      'access_token',
+      'refresh_token',
+      'user_json',
+      'family_json',
+      'user_id',
+      'family_id',
+      'places_json',
+    ];
+    final storeSrc = File('lib/core/storage/session_store.dart').readAsStringSync();
+    for (final key in keys) {
+      expect(storeSrc.contains("'$key'"), isTrue, reason: 'falta clave $key');
+    }
+    final boot = File('lib/core/state/app_controller.dart').readAsStringSync();
+    final bootFn = RegExp(
+      r'Future<void> bootstrap\(\) async \{[\s\S]*?\n  \}',
+    ).firstMatch(boot)?.group(0);
+    expect(bootFn, isNotNull);
+    expect(bootFn!.contains('clearAllLocal'), isFalse);
+    expect(bootFn.contains('clearSession'), isFalse);
+    expect(boot.contains('sessionValidationFailed'), isTrue);
+  });
+
+  test('applicationId estable en gradle', () {
+    final gradle = File('android/app/build.gradle.kts').readAsStringSync();
+    expect(gradle.contains('applicationId = "com.llegue.llegue_mobile"'), isTrue);
+    expect(gradle.contains('signingConfigs.getByName("debug")'), isFalse);
+    expect(gradle.contains('sideload.keystore'), isTrue);
   });
 
   test(
@@ -273,6 +355,7 @@ void main() {
 
       expect(app.isLoggedIn, isTrue);
       expect(app.hasFamily, isTrue);
+      expect(app.sessionValidationFailed, isFalse);
       expect(app.startRoute, '/home');
       expect(api.refreshCalls, greaterThanOrEqualTo(1));
     },
