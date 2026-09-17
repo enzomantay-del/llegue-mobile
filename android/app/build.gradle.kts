@@ -1,7 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -16,6 +26,7 @@ android {
     }
 
     defaultConfig {
+        // INMUTABLE: cambiar applicationId = otra app = datos locales borrados.
         applicationId = "com.llegue.llegue_mobile"
         minSdk = 24
         targetSdk = 36
@@ -24,11 +35,30 @@ android {
         multiDexEnabled = true
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Sideload: SIEMPRE la misma firma (android/key.properties + sideload.keystore).
+            // Nunca firmar release con el debug keystore “efímero” de otra máquina.
+            if (!hasReleaseKeystore) {
+                throw GradleException(
+                    "Falta android/key.properties + sideload.keystore. " +
+                        "Copiá desde D:\\Documents\\Prueba de Cursor\\llegue-signing\\ " +
+                        "o seguí android/SIDELOAD-SIGNING.md. " +
+                        "Sin firma fija, instalar encima borra la sesión.",
+                )
+            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

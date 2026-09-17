@@ -780,6 +780,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                   .pushNamed(SettingsHubScreen.route),
                               onOpenMenu: app.isAdult ? _openAdultMenu : null,
                             ),
+                            if (app.sessionValidationFailed) ...[
+                              const SizedBox(height: 12),
+                              _SessionValidationBanner(
+                                message: app.sessionValidationMessage ??
+                                    'No pudimos validar la sesión.',
+                                onRetry: () => _run(app.retrySessionValidation),
+                              ),
+                            ],
                             const SizedBox(height: 24),
                             if (app.isKid)
                               ..._buildKidHome(app)
@@ -1268,6 +1276,56 @@ class _TopBar extends StatelessWidget {
           icon: const Icon(Icons.manage_accounts_rounded, color: Colors.white),
         ),
       ],
+    );
+  }
+}
+
+class _SessionValidationBanner extends StatelessWidget {
+  const _SessionValidationBanner({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xCC7A4E12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: GoogleFonts.dmSans(
+                color: Colors.white,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: Text(
+              'Reintentar',
+              style: GoogleFonts.dmSans(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
