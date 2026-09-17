@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/state/app_controller.dart';
@@ -12,10 +13,28 @@ import 'help_screen.dart';
 import 'profile_screen.dart';
 
 /// Hub de cuenta: perfil, avisos, ayuda y salir.
-class SettingsHubScreen extends StatelessWidget {
+class SettingsHubScreen extends StatefulWidget {
   const SettingsHubScreen({super.key});
 
   static const route = '/settings';
+
+  @override
+  State<SettingsHubScreen> createState() => _SettingsHubScreenState();
+}
+
+class _SettingsHubScreenState extends State<SettingsHubScreen> {
+  String _versionLabel = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (!mounted) return;
+      setState(() {
+        _versionLabel = 'Versión ${info.version} (${info.buildNumber})';
+      });
+    });
+  }
 
   Future<void> _logout(BuildContext context) async {
     final ok = await showDialog<bool>(
@@ -102,6 +121,16 @@ class SettingsHubScreen extends StatelessWidget {
                               fontSize: 14,
                             ),
                           ),
+                          if (_versionLabel.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              _versionLabel,
+                              style: GoogleFonts.dmSans(
+                                color: Colors.white.withValues(alpha: 0.55),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

@@ -1,7 +1,7 @@
 name: llegue_mobile
 description: "Llegué — tranquilidad familiar cuando los chicos salen solos."
 publish_to: 'none'
-version: 1.0.0+4
+version: 1.0.0+5
 
 environment:
   sdk: ^3.12.2
@@ -24,6 +24,7 @@ dependencies:
   flutter_map: ^8.3.1
   latlong2: ^0.10.1
   wakelock_plus: ^1.7.0
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:
