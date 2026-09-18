@@ -348,11 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final app = context.read<AppController>();
     final isAdultForKid = app.isAdult && forKidId != null;
     String? placeId;
-    var setReturn = false;
-    var returnTime = TimeOfDay(
-      hour: (TimeOfDay.now().hour + 2) % 24,
-      minute: 0,
-    );
+    // Hora de vuelta / demora: fuera de la UI (confundía; el lugar es lo obligatorio).
 
     final ok = await showModalBottomSheet<bool>(
       context: context,
@@ -361,6 +357,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModal) {
+            final canSubmit = placeId != null && placeId!.isNotEmpty;
             return Padding(
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -384,70 +381,52 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? 'Elegí a dónde va. La app avisa sola cuando llegue.'
                         : 'Elegí a dónde vas. La app avisa sola cuando llegues.',
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 20),
                   if (app.places.isEmpty)
                     const Text(
                       'Todavía no hay lugares. Primero agregá o sugerí uno (ej. casa de un amigo).',
                     )
                   else
-                    DropdownButtonFormField<String?>(
+                    DropdownButtonFormField<String>(
                       initialValue: placeId,
+                      isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: '¿A dónde? (recomendado)',
+                        labelText: '¿A dónde?',
+                        hintText: 'Elegí un lugar',
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        contentPadding: EdgeInsets.fromLTRB(16, 20, 12, 16),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.all(Radius.circular(14)),
                           borderSide: BorderSide.none,
                         ),
                       ),
                       items: [
-                        const DropdownMenuItem<String?>(
-                          value: null,
-                          child: Text('Sin lugar fijo'),
-                        ),
                         for (final p in app.places)
                           DropdownMenuItem(
                             value: p['id'] as String,
-                            child: Text(p['name'] as String? ?? 'Lugar'),
+                            child: Text(
+                              p['name'] as String? ?? 'Lugar',
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                       ],
                       onChanged: (v) => setModal(() => placeId = v),
                     ),
-                  const SizedBox(height: 12),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Avisar si se demora'),
-                    subtitle: Text(
-                      setReturn
-                          ? 'Vuelve alrededor de '
-                              '${returnTime.hour.toString().padLeft(2, '0')}:'
-                              '${returnTime.minute.toString().padLeft(2, '0')}'
-                          : 'Sin hora de vuelta',
-                    ),
-                    value: setReturn,
-                    onChanged: (v) => setModal(() => setReturn = v),
-                  ),
-                  if (setReturn)
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        final picked = await showTimePicker(
-                          context: context,
-                          initialTime: returnTime,
-                          helpText: '¿A qué hora vuelve?',
-                        );
-                        if (picked != null) {
-                          setModal(() => returnTime = picked);
-                        }
-                      },
-                      icon: const Icon(Icons.schedule),
-                      label: Text(
-                        'Hora de vuelta '
-                        '${returnTime.hour.toString().padLeft(2, '0')}:'
-                        '${returnTime.minute.toString().padLeft(2, '0')}',
+                  if (placeId == null && app.places.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Tenés que elegir un lugar para avisar la salida.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 13,
                       ),
                     ),
+                  ],
                   const SizedBox(height: 16),
                   FilledButton(
-                    onPressed: () => Navigator.pop(context, true),
+                    onPressed: !canSubmit
+                        ? null
+                        : () => Navigator.pop(context, true),
                     child: const Text('Avisar salida'),
                   ),
                   const SizedBox(height: 8),
@@ -460,19 +439,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (ok != true || !mounted) return;
-
-    String? expectedReturnAt;
-    if (setReturn) {
-      final now = DateTime.now();
-      var dt = DateTime(
-        now.year,
-        now.month,
-        now.day,
-        returnTime.hour,
-        returnTime.minute,
+    if (placeId == null || placeId!.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Elegí a dónde va la salida.')),
       );
-      if (dt.isBefore(now)) dt = dt.add(const Duration(days: 1));
-      expectedReturnAt = dt.toUtc().toIso8601String();
+      return;
     }
 
     await _run(
@@ -480,7 +452,6 @@ class _HomeScreenState extends State<HomeScreen> {
         await app.startTrip(
           kidId: forKidId,
           destinationPlaceId: placeId,
-          expectedReturnAt: expectedReturnAt,
           forceNotify: false,
         );
       },
