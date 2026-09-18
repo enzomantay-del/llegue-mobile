@@ -1083,11 +1083,31 @@ class AppController extends ChangeNotifier {
       try {
         await api.patchTrip(activeTrip!['id'] as String, action: 'cancel');
       } catch (_) {}
+      activeTrip = null;
     }
-    return startTrip(
-      destinationPlaceId: home['id'] as String,
-      kind: 'walking_home',
-    );
+    try {
+      return await startTrip(
+        destinationPlaceId: home['id'] as String,
+        kind: 'walking_home',
+        forceNotify: true,
+      );
+    } on ApiException catch (e) {
+      // Carrera: quedó una salida abierta → cancelar y reintentar una vez.
+      final lower = e.message.toLowerCase();
+      if (!lower.contains('salida en curso')) rethrow;
+      try {
+        final live = await api.activeTrip();
+        final id = live['trip'] is Map ? (live['trip'] as Map)['id'] : null;
+        if (id is String && id.isNotEmpty) {
+          await api.patchTrip(id, action: 'cancel');
+        }
+      } catch (_) {}
+      return startTrip(
+        destinationPlaceId: home['id'] as String,
+        kind: 'walking_home',
+        forceNotify: true,
+      );
+    }
   }
 
   Future<Map<String, dynamic>> startTrip({
