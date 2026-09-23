@@ -9,6 +9,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/brand_mark.dart';
 import '../legal/terms_screen.dart';
 import 'phone_login_screen.dart';
+import 'switch_person_dialog.dart';
 import 'titular_onboarding_screen.dart';
 import '../family_setup/join_family_screen.dart';
 
@@ -155,7 +156,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   const SizedBox(height: 14),
                   Text(
                     bound
-                        ? 'Bienvenido de nuevo, ${app.boundUserName}.'
+                        ? 'Este celular estaba como ${app.boundUserName}.'
                         : 'Tranquilidad al saber que llegaron.\n'
                             'Sin pedir que te avisen.',
                     style: GoogleFonts.dmSans(
@@ -249,7 +250,29 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                                 );
                               })
                           : null,
-                      child: const Text('Entrar'),
+                      child: Text('Seguir como ${app.boundUserName}'),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton(
+                      onPressed: _checked
+                          ? () => _go(() async {
+                                final from = app.boundUserName ?? 'esta persona';
+                                final ok = await confirmSwitchPerson(
+                                  context,
+                                  fromName: from,
+                                );
+                                if (!ok || !context.mounted) return;
+                                try {
+                                  await app.releaseDeviceForSomeoneElse();
+                                } on ApiException catch (e) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(e.message)),
+                                  );
+                                }
+                              })
+                          : null,
+                      child: const Text('Cambiar a otra persona en este celular'),
                     ),
                   ] else ...[
                     FilledButton(

@@ -464,6 +464,8 @@ class AppController extends ChangeNotifier {
     required String phone,
     required String code,
     String? name,
+    bool reassignDevice = false,
+    String? inviteToken,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
     final data = await api.verifyOtp(
@@ -472,6 +474,8 @@ class AppController extends ChangeNotifier {
       name: name,
       installId: installId!,
       platform: _platform,
+      reassignDevice: reassignDevice,
+      inviteToken: inviteToken,
     );
     await _applyAuth(data);
   }
@@ -479,6 +483,7 @@ class AppController extends ChangeNotifier {
   Future<void> loginWithPin({
     required String inviteTokenOrCode,
     required String pin,
+    bool reassignDevice = false,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
     final data = await api.loginWithPin(
@@ -486,6 +491,7 @@ class AppController extends ChangeNotifier {
       pin: pin,
       installId: installId!,
       platform: _platform,
+      reassignDevice: reassignDevice,
     );
     await _applyAuth(data);
     permissionsReady = false;
@@ -555,19 +561,38 @@ class AppController extends ChangeNotifier {
     return Map<String, dynamic>.from(data['invitation'] as Map);
   }
 
-  Future<void> acceptInvitation(String token, {String? pin}) async {
+  Future<void> acceptInvitation(
+    String token, {
+    String? pin,
+    bool reassignDevice = false,
+  }) async {
     installId ??= await DeviceIdentity.getInstallId();
     final data = await api.acceptInvitation(
       token,
       pin: pin,
       installId: installId!,
       platform: _platform,
+      reassignDevice: reassignDevice,
     );
     await _applyAuth(data);
     pendingInviteToken = null;
     await store.setPendingInvite(null);
     permissionsReady = false;
     await store.setPermissionsReady(false);
+  }
+
+  Future<void> releaseDeviceForSomeoneElse() async {
+    installId ??= await DeviceIdentity.getInstallId();
+    await api.releaseDevice(installId: installId!, confirm: true);
+    final showLogin = bootstrapped && isLoggedIn;
+    await _wipeLocalSession();
+    boundUserName = null;
+    boundUserRole = null;
+    boundUserPhone = null;
+    deviceBoundOnServer = false;
+    await store.clearBoundIdentity();
+    if (showLogin) pendingLoginRedirect = true;
+    notifyListeners();
   }
 
   Future<void> setPendingInvite(String? token) async {

@@ -4,13 +4,23 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.code, this.body});
   final String message;
   final int? statusCode;
+  final String? code;
+  final Map<String, dynamic>? body;
 
   bool get isUnauthorized => statusCode == 401;
   bool get isServerError =>
       statusCode != null && statusCode! >= 500 && statusCode! < 600;
+  bool get isDeviceBound => code == 'device_bound';
+  bool get isPhoneOwner => code == 'phone_owner';
+
+  String? get boundUserName {
+    final user = body?['boundUser'];
+    if (user is Map && user['name'] is String) return user['name'] as String;
+    return null;
+  }
 
   @override
   String toString() => message;
@@ -208,6 +218,8 @@ class ApiClient {
       throw ApiException(
         body['error'] as String? ?? fallback,
         statusCode: res.statusCode,
+        code: body['code'] as String?,
+        body: body,
       );
     }
     return body;
@@ -264,6 +276,8 @@ class ApiClient {
     String? name,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
+    String? inviteToken,
   }) async {
     final res = await _send(
       http.post(
@@ -275,6 +289,8 @@ class ApiClient {
           'installId': installId,
           'platform': platform,
           if (name != null) 'name': name,
+          if (reassignDevice) 'reassignDevice': true,
+          if (inviteToken != null && inviteToken.isNotEmpty) 'inviteToken': inviteToken,
         }),
       ),
     );
@@ -286,6 +302,7 @@ class ApiClient {
     required String pin,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
   }) async {
     final res = await _send(
       http.post(
@@ -296,10 +313,28 @@ class ApiClient {
           'pin': pin,
           'installId': installId,
           'platform': platform,
+          if (reassignDevice) 'reassignDevice': true,
         }),
       ),
     );
     return _json(res);
+  }
+
+  Future<Map<String, dynamic>> releaseDevice({
+    required String installId,
+    required bool confirm,
+  }) async {
+    final res = await _send(
+      http.post(
+        _u('/devices/release'),
+        headers: _headers(),
+        body: jsonEncode({
+          'installId': installId,
+          'confirm': confirm,
+        }),
+      ),
+    );
+    return _json(res, fallback: 'No pudimos soltar este celular.');
   }
 
   Future<Map<String, dynamic>> lookupInstall(String installId) async {
@@ -393,6 +428,7 @@ class ApiClient {
     String? pin,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
   }) async {
     final res = await _sendAuth(
       () => http.post(
@@ -402,6 +438,7 @@ class ApiClient {
           'installId': installId,
           'platform': platform,
           if (pin != null && pin.isNotEmpty) 'pin': pin,
+          if (reassignDevice) 'reassignDevice': true,
         }),
       ),
     );
