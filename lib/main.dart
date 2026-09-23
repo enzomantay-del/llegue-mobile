@@ -71,6 +71,7 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.controller.addListener(_onController);
     widget.controller.alerts.onSelected = _onNotificationPayload;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_openLaunchNotification());
@@ -90,6 +91,17 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  void _onController() {
+    if (!widget.controller.pendingLoginRedirect) return;
+    widget.controller.pendingLoginRedirect = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        WelcomeScreen.route,
+        (_) => false,
+      );
+    });
+  }
+
   Future<void> _openLaunchNotification() async {
     final payload = await widget.controller.alerts.consumeLaunchPayload();
     if (payload != null) _onNotificationPayload(payload);
@@ -106,6 +118,7 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onController);
     if (widget.controller.alerts.onSelected == _onNotificationPayload) {
       widget.controller.alerts.onSelected = null;
     }

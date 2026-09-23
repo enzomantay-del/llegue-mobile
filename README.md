@@ -1,6 +1,15 @@
 # llegue_mobile
 
-A new Flutter project.
+App Android de Llegué.
+
+## Sesión y reinstalación
+
+Si la sesión del servidor ya no vale (401), la app vuelve al inicio y no deja la familia en pantalla.
+
+Al desinstalar, Android **no** debería restaurar el token (`allowBackup=false`). Si después de instalar sigue la cuenta vieja:
+
+1. Ajustes → Apps → Llegué → Almacenamiento → **Borrar datos** en cada celular.
+2. Instalá el APK de nuevo y creá la familia desde cero.
 
 ## Getting Started
 

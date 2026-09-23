@@ -63,10 +63,12 @@ class AppController extends ChangeNotifier {
   bool keepAliveOnboardingSeen = false;
   String? pendingInviteToken;
   bool bootstrapped = false;
-  /// Sesión local intacta pero el server no la validó (401 / outage / DB reset).
-  /// No implica clearSession: el usuario puede reintentar o cerrar sesión a mano.
+  /// Solo cortes de red / 5xx. Un 401 (token muerto o usuario borrado) no deja
+  /// esta bandera: borra la sesión y vuelve al inicio.
   bool sessionValidationFailed = false;
   String? sessionValidationMessage;
+  /// La UI debe ir a la pantalla de bienvenida (sesión inválida o Salir).
+  bool pendingLoginRedirect = false;
   String? lastError;
   String geofenceStatus = 'Detección pausada';
   bool monitoring = false;
@@ -176,9 +178,9 @@ class AppController extends ChangeNotifier {
   }
 
   /// Si hay token, confirma sesión contra /auth/me y /family/status.
-  /// Red / 5xx: se queda la sesión local.
-  /// 401 tras refresh fallido: NO borra prefs (puede ser DB wipe en Render);
-  /// marca [sessionValidationFailed] para reintento / login explícito.
+  /// Red / 5xx: se queda la sesión local y se puede reintentar.
+  /// 401 definitivo (token inválido o usuario que ya no existe): borra
+  /// tokens, usuario, familia y lugares, y pide volver al inicio.
   Future<void> reconcileSessionWithServer() async {
     sessionValidationFailed = false;
     sessionValidationMessage = null;
@@ -224,7 +226,7 @@ class AppController extends ChangeNotifier {
   void _markValidationFailed(String message) {
     sessionValidationFailed = true;
     sessionValidationMessage = message;
-    debugPrint('[llegue:bootstrap] validationFailed (no clearSession): $message');
+    debugPrint('[llegue:bootstrap] validationFailed (sesión local conservada): $message');
     notifyListeners();
   }
 
@@ -248,7 +250,18 @@ class AppController extends ChangeNotifier {
 
   Future<void> _applyMeAndFamilyStatus() async {
     final me = await api.me();
-    user = Map<String, dynamic>.from(me['user'] as Map);
+    final rawUser = me['user'];
+    if (rawUser is! Map) {
+      await dropInvalidSession();
+      return;
+    }
+    final nextUser = Map<String, dynamic>.from(rawUser);
+    final userId = nextUser['id'] as String?;
+    if (userId == null || userId.isEmpty) {
+      await dropInvalidSession();
+      return;
+    }
+    user = nextUser;
     family = me['family'] == null
         ? null
         : Map<String, dynamic>.from(me['family'] as Map);
@@ -273,13 +286,15 @@ class AppController extends ChangeNotifier {
         await _applyMeAndFamilyStatus();
         return;
       } on ApiException catch (e) {
-        if (!e.isUnauthorized) {
-          // Red / 5xx en refresh: conservar sesión local.
-          _markValidationFailed(
-            'No pudimos validar la sesión. Revisá la conexión e intentá de nuevo.',
-          );
+        if (e.isUnauthorized) {
+          await dropInvalidSession();
           return;
         }
+        // Red / 5xx en refresh: conservar sesión local para reintentar.
+        _markValidationFailed(
+          'No pudimos validar la sesión. Revisá la conexión e intentá de nuevo.',
+        );
+        return;
       } catch (_) {
         _markValidationFailed(
           'No pudimos validar la sesión. Revisá la conexión e intentá de nuevo.',
@@ -288,22 +303,34 @@ class AppController extends ChangeNotifier {
       }
     }
 
-    // 401 definitivo del server (token inválido o usuario borrado en DB).
-    // NO clearSession: puede ser wipe efímero de Render. El usuario reintenta
-    // o elige “Cerrar sesión” a mano.
+    // 401 definitivo: token inválido o el usuario ya no existe en el servidor.
     debugPrint(
-      '[llegue:bootstrap] 401 after refresh — keeping local session '
-      '(no clearSession). familyId=${await store.familyId}',
+      '[llegue:bootstrap] 401 after refresh — clearSession → login. '
+      'familyId=${await store.familyId}',
     );
-    _markValidationFailed(
-      'No pudimos validar la sesión con el servidor. '
-      'Tus datos en este celular siguen guardados. Reintentá; '
-      'si sigue fallando, cerrá sesión desde Ajustes y volvé a entrar.',
-    );
+    await dropInvalidSession();
+  }
+
+  /// Borra tokens, usuario, familia y lugares. Si la app ya está en pantalla,
+  /// pide volver al inicio (no deja el home con sesión muerta).
+  Future<void> dropInvalidSession() async {
+    final showLogin = bootstrapped;
+    await _wipeLocalSession();
+    try {
+      await refreshDeviceBinding();
+    } catch (_) {}
+    if (showLogin) {
+      pendingLoginRedirect = true;
+      notifyListeners();
+    }
   }
 
   Future<void> retrySessionValidation() async {
     await reconcileSessionWithServer();
+    // Si Reintentar vuelve a chocar con auth, no dejar el banner en loop.
+    if (sessionValidationFailed && !isLoggedIn) {
+      await dropInvalidSession();
+    }
     notifyListeners();
   }
 
@@ -1169,7 +1196,7 @@ class AppController extends ChangeNotifier {
     return data;
   }
 
-  Future<void> logout() async {
+  Future<void> _wipeLocalSession() async {
     await stopRuntimeServices();
     api.accessToken = null;
     api.refreshToken = null;
@@ -1186,10 +1213,20 @@ class AppController extends ChangeNotifier {
     sessionValidationMessage = null;
     _seenNotificationIds.clear();
     _alertsPrimed = false;
-    // Conserva boundUserName/Role e installId: este celular sigue siendo de esa persona
     await store.clearSession();
-    await refreshDeviceBinding();
     notifyListeners();
+  }
+
+  Future<void> logout() async {
+    final showLogin = bootstrapped;
+    await _wipeLocalSession();
+    try {
+      await refreshDeviceBinding();
+    } catch (_) {}
+    if (showLogin) {
+      pendingLoginRedirect = true;
+      notifyListeners();
+    }
   }
 
   Future<void> _applyAuth(Map<String, dynamic> data) async {
