@@ -7,6 +7,7 @@ import '../../core/widgets/app_background.dart';
 import '../family_setup/create_family_screen.dart';
 import '../family_setup/join_family_screen.dart';
 import 'permissions_location_screen.dart';
+import 'switch_person_dialog.dart';
 
 class PhoneLoginScreen extends StatefulWidget {
   const PhoneLoginScreen({super.key});
@@ -86,13 +87,55 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
     });
     try {
       final app = context.read<AppController>();
-      await app.verifyOtp(phone: _phone.text.trim(), code: _code.text.trim());
+      await _verifyWith(app, reassignDevice: false);
+    } on ApiException catch (e) {
       if (!mounted) return;
+      if (e.isPhoneOwner) {
+        setState(() => _error = e.message);
+        return;
+      }
+      if (e.code == 'device_bound') {
+        final from = e.boundUserName ?? 'otra persona';
+        final to = _args['inviteName'] as String?;
+        final ok = await confirmSwitchPerson(
+          context,
+          fromName: from,
+          toName: to,
+        );
+        if (!ok || !mounted) return;
+        try {
+          final app = context.read<AppController>();
+          await _verifyWith(app, reassignDevice: true);
+          return;
+        } on ApiException catch (again) {
+          if (!mounted) return;
+          setState(() => _error = again.message);
+          return;
+        }
+      }
+      setState(() => _error = e.message);
+    } catch (_) {
+      setState(() => _error = 'No pudimos entrar. Probá de nuevo.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
-      final inviteToken = (_args['inviteToken'] as String?)?.trim().isNotEmpty == true
-          ? _args['inviteToken'] as String
-          : app.pendingInviteToken;
+  Future<void> _verifyWith(AppController app, {required bool reassignDevice}) async {
+    final inviteToken = (_args['inviteToken'] as String?)?.trim().isNotEmpty == true
+        ? _args['inviteToken'] as String
+        : app.pendingInviteToken;
+    await app.verifyOtp(
+      phone: _phone.text.trim(),
+      code: _code.text.trim(),
+      reassignDevice: reassignDevice,
+      inviteToken: inviteToken,
+    );
+    if (!mounted) return;
+    await _goAfterLogin(app, inviteToken);
+  }
 
+  Future<void> _goAfterLogin(AppController app, String? inviteToken) async {
       // Flujo invitado: tras el teléfono, aceptar la invitación al toque.
       if (_mode == 'join' ||
           (inviteToken != null && inviteToken.isNotEmpty)) {
@@ -107,6 +150,10 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
             );
             return;
           } on ApiException catch (e) {
+            if (e.isPhoneOwner) {
+              setState(() => _error = e.message);
+              return;
+            }
             // Si falla, volvemos a la pantalla de invitación con el error.
             if (!mounted) return;
             Navigator.of(context).pushNamedAndRemoveUntil(
@@ -142,13 +189,6 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       } else {
         Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
       }
-    } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } catch (_) {
-      setState(() => _error = 'No pudimos entrar. Probá de nuevo.');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
 
   @override

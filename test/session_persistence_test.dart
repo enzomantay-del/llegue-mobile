@@ -198,20 +198,67 @@ void main() {
     },
   );
 
-  test('401 tras refresh fallido: NO limpia familia local (posible DB wipe)', () async {
+  test('401 tras refresh fallido: limpia sesión y vuelve al inicio', () async {
     final api = FakeApiClient()
       ..meError = ApiException('Sesión inválida.', statusCode: 401)
       ..refreshError = ApiException('Sesión vencida.', statusCode: 401);
     final app = await _controllerWithSavedSession(api: api);
     await app.reconcileSessionWithServer();
 
-    expect(app.isLoggedIn, isTrue);
-    expect(app.hasFamily, isTrue);
+    expect(app.isLoggedIn, isFalse);
+    expect(app.hasFamily, isFalse);
+    expect(app.sessionValidationFailed, isFalse);
+    expect(app.places, isEmpty);
+    expect(app.startRoute, '/');
+    expect(await app.store.accessToken, isNull);
+    expect(await app.store.refreshToken, isNull);
+    expect(await app.store.familyId, isNull);
+    expect(await app.store.userId, isNull);
+    expect(await app.store.places, isEmpty);
+  });
+
+  test('Reintentar un 401 no deja el banner: sigue en login limpio', () async {
+    final api = FakeApiClient()
+      ..meError = ApiException('Sesión inválida.', statusCode: 401)
+      ..refreshError = ApiException('Sesión vencida.', statusCode: 401);
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
+    await app.retrySessionValidation();
+
+    expect(app.sessionValidationFailed, isFalse);
+    expect(app.isLoggedIn, isFalse);
+    expect(app.startRoute, '/');
+    expect(await app.store.places, isEmpty);
+  });
+
+  test('5xx y después 401 en Reintentar: recién ahí borra la sesión', () async {
+    final api = FakeApiClient()
+      ..meError = ApiException('Server error', statusCode: 503);
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
     expect(app.sessionValidationFailed, isTrue);
-    expect(app.startRoute, '/home');
-    expect(await app.store.accessToken, isNotNull);
+    expect(app.isLoggedIn, isTrue);
     expect(await app.store.familyId, 'f1');
-    expect(app.places.single['id'], 'p1');
+
+    api.meError = ApiException('Sesión inválida.', statusCode: 401);
+    api.refreshError = ApiException('Sesión vencida.', statusCode: 401);
+    await app.retrySessionValidation();
+
+    expect(app.isLoggedIn, isFalse);
+    expect(app.sessionValidationFailed, isFalse);
+    expect(app.startRoute, '/');
+    expect(await app.store.places, isEmpty);
+  });
+
+  test('usuario inexistente en /auth/me: limpia la sesión local', () async {
+    final api = FakeApiClient()..meBody = {'user': <String, dynamic>{}};
+    final app = await _controllerWithSavedSession(api: api);
+    await app.reconcileSessionWithServer();
+
+    expect(app.isLoggedIn, isFalse);
+    expect(app.startRoute, '/');
+    expect(await app.store.familyId, isNull);
+    expect(await app.store.places, isEmpty);
   });
 
   test('5xx al arrancar: no logout, conserva sesión', () async {
@@ -228,16 +275,23 @@ void main() {
 
   test('logout explícito sí borra sesión', () async {
     final api = FakeApiClient()
-      ..meError = ApiException('Sesión inválida.', statusCode: 401)
-      ..refreshError = ApiException('Sesión vencida.', statusCode: 401);
+      ..meBody = {'user': _user(), 'family': _family()}
+      ..familyBody = {
+        'family': _family(),
+        'members': [_user()],
+        'places': _places(),
+      };
     final app = await _controllerWithSavedSession(api: api);
     await app.reconcileSessionWithServer();
-    expect(app.sessionValidationFailed, isTrue);
+    expect(app.isLoggedIn, isTrue);
 
     await app.logout();
     expect(app.isLoggedIn, isFalse);
+    expect(app.places, isEmpty);
     expect(await app.store.accessToken, isNull);
+    expect(await app.store.refreshToken, isNull);
     expect(await app.store.familyId, isNull);
+    expect(await app.store.places, isEmpty);
   });
 
   test('401 con refresh OK no limpia familia', () async {
@@ -290,6 +344,19 @@ void main() {
     expect(gradle.contains('applicationId = "com.llegue.llegue_mobile"'), isTrue);
     expect(gradle.contains('signingConfigs.getByName("debug")'), isFalse);
     expect(gradle.contains('sideload.keystore'), isTrue);
+  });
+
+  test('Android no restaura la sesión al reinstalar', () {
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    expect(manifest.contains('android:allowBackup="false"'), isTrue);
+    expect(manifest.contains('dataExtractionRules'), isTrue);
+    final rules = File(
+      'android/app/src/main/res/xml/data_extraction_rules.xml',
+    ).readAsStringSync();
+    expect(rules.contains('FlutterSharedPreferences.xml'), isTrue);
+    expect(rules.contains('device-transfer'), isTrue);
   });
 
   test(

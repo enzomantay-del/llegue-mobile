@@ -4,13 +4,23 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.code, this.body});
   final String message;
   final int? statusCode;
+  final String? code;
+  final Map<String, dynamic>? body;
 
   bool get isUnauthorized => statusCode == 401;
   bool get isServerError =>
       statusCode != null && statusCode! >= 500 && statusCode! < 600;
+  bool get isDeviceBound => code == 'device_bound';
+  bool get isPhoneOwner => code == 'phone_owner';
+
+  String? get boundUserName {
+    final user = body?['boundUser'];
+    if (user is Map && user['name'] is String) return user['name'] as String;
+    return null;
+  }
 
   @override
   String toString() => message;
@@ -23,7 +33,7 @@ class ApiClient {
   /// Si no hay, usa la IP local de la PC. Con hosting, pegá https://….onrender.com una vez.
   static const defaultBaseUrl = 'https://llegue-api.onrender.com';
   static const lanFallbackUrl = 'http://192.168.0.111:8787';
-  static const _timeout = Duration(seconds: 25);
+  static const _timeout = Duration(seconds: 45);
 
   String baseUrl;
   String? accessToken;
@@ -50,30 +60,44 @@ class ApiClient {
     return h;
   }
 
-  Future<http.Response> _send(Future<http.Response> future) async {
-    try {
-      return await future.timeout(_timeout);
-    } on TimeoutException {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
-    } on ApiException {
-      rethrow;
-    } on http.ClientException catch (_) {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
-    } catch (_) {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
+  /// Hasta 2 intentos. Render Free puede tardar ~1 min al despertar.
+  /// Un timeout NO es 401: no hay que borrar la sesión.
+  Future<http.Response> _send(Future<http.Response> Function() make) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await make().timeout(_timeout);
+      } on TimeoutException {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… El servidor tardó. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      } on ApiException {
+        rethrow;
+      } on http.ClientException {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… No llegamos al servidor. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      } catch (_) {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… No llegamos al servidor. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
+    throw ApiException(
+      'Conectando… El servidor tardó. Tu sesión sigue guardada. Probá de nuevo.',
+    );
   }
 
   /// Reintenta una vez si el access token venció. Un fallo de red en el
   /// refresh NO se convierte en 401 (no hay que borrar la sesión).
   Future<http.Response> _sendAuth(Future<http.Response> Function() send) async {
-    final res = await _send(send());
+    final res = await _send(send);
     if (res.statusCode != 401) return res;
     try {
       await refreshSession();
@@ -85,7 +109,7 @@ class ApiClient {
         'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
       );
     }
-    return _send(send());
+    return _send(send);
   }
 
   bool get accessTokenNearExpiry {
@@ -138,8 +162,7 @@ class ApiClient {
     if (token == null || token.isEmpty) {
       throw ApiException('Tenés que iniciar sesión.', statusCode: 401);
     }
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/refresh'),
         headers: _headers(),
         body: jsonEncode({'refreshToken': token}),
@@ -178,7 +201,7 @@ class ApiClient {
     }
 
     try {
-      return await _send(once(baseUrl));
+      return await _send(() => once(baseUrl));
     } on ApiException {
       // Si falla el túnel/público, probá la red local de la PC.
       if (baseUrl != lanFallbackUrl && baseUrl != defaultBaseUrl) {
@@ -186,7 +209,7 @@ class ApiClient {
       }
       final alt = baseUrl == defaultBaseUrl ? lanFallbackUrl : defaultBaseUrl;
       try {
-        final res = await _send(once(alt));
+        final res = await _send(() => once(alt));
         baseUrl = alt;
         return res;
       } on ApiException {
@@ -208,6 +231,8 @@ class ApiClient {
       throw ApiException(
         body['error'] as String? ?? fallback,
         statusCode: res.statusCode,
+        code: body['code'] as String?,
+        body: body,
       );
     }
     return body;
@@ -219,8 +244,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> requestEmailOtp(String email) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/request-email-otp'),
         headers: _headers(),
         body: jsonEncode({'email': email}),
@@ -239,8 +263,7 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/register-titular'),
         headers: _headers(),
         body: jsonEncode({
@@ -264,9 +287,10 @@ class ApiClient {
     String? name,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
+    String? inviteToken,
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/verify-otp'),
         headers: _headers(),
         body: jsonEncode({
@@ -275,6 +299,8 @@ class ApiClient {
           'installId': installId,
           'platform': platform,
           if (name != null) 'name': name,
+          if (reassignDevice) 'reassignDevice': true,
+          if (inviteToken != null && inviteToken.isNotEmpty) 'inviteToken': inviteToken,
         }),
       ),
     );
@@ -286,9 +312,9 @@ class ApiClient {
     required String pin,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/login-with-pin'),
         headers: _headers(),
         body: jsonEncode({
@@ -296,15 +322,32 @@ class ApiClient {
           'pin': pin,
           'installId': installId,
           'platform': platform,
+          if (reassignDevice) 'reassignDevice': true,
         }),
       ),
     );
     return _json(res);
   }
 
+  Future<Map<String, dynamic>> releaseDevice({
+    required String installId,
+    required bool confirm,
+  }) async {
+    final res = await _send(() => http.post(
+        _u('/devices/release'),
+        headers: _headers(),
+        body: jsonEncode({
+          'installId': installId,
+          'confirm': confirm,
+        }),
+      ),
+    );
+    return _json(res, fallback: 'No pudimos soltar este celular.');
+  }
+
   Future<Map<String, dynamic>> lookupInstall(String installId) async {
     final res = await _send(
-      http.get(
+      () => http.get(
         _u('/devices/lookup?installId=${Uri.encodeComponent(installId)}'),
       ),
     );
@@ -384,7 +427,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getInvitation(String token) async {
-    final res = await _send(http.get(_u('/invitations/$token')));
+    final res = await _send(() => http.get(_u('/invitations/$token')));
     return _json(res);
   }
 
@@ -393,6 +436,7 @@ class ApiClient {
     String? pin,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
   }) async {
     final res = await _sendAuth(
       () => http.post(
@@ -402,6 +446,7 @@ class ApiClient {
           'installId': installId,
           'platform': platform,
           if (pin != null && pin.isNotEmpty) 'pin': pin,
+          if (reassignDevice) 'reassignDevice': true,
         }),
       ),
     );
@@ -767,7 +812,7 @@ class ApiClient {
 
   Future<bool> ping() async {
     try {
-      final res = await _send(http.get(_u('/health')));
+      final res = await _send(() => http.get(_u('/health')));
       return res.statusCode == 200;
     } catch (_) {
       return false;

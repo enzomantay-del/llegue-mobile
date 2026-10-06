@@ -8,6 +8,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
 import '../onboarding/permissions_location_screen.dart';
 import '../onboarding/phone_login_screen.dart';
+import '../onboarding/switch_person_dialog.dart';
 
 class JoinFamilyScreen extends StatefulWidget {
   const JoinFamilyScreen({super.key});
@@ -85,6 +86,28 @@ class _JoinFamilyScreenState extends State<JoinFamilyScreen> {
 
     final app = context.read<AppController>();
 
+    if (app.deviceBoundOnServer &&
+        app.boundUserName != null &&
+        app.boundUserName!.isNotEmpty) {
+      final target = _preview?['nameHint'] as String?;
+      final same = target != null &&
+          target.trim().toLowerCase() == app.boundUserName!.trim().toLowerCase();
+      if (!same) {
+        final ok = await confirmSwitchPerson(
+          context,
+          fromName: app.boundUserName!,
+          toName: target,
+        );
+        if (!ok || !mounted) return;
+        try {
+          await app.releaseDeviceForSomeoneElse();
+        } on ApiException catch (e) {
+          setState(() => _error = e.message);
+          return;
+        }
+      }
+    }
+
     // Solo bloquear si ESTE celular ya está dentro de una familia.
     if (app.hasFamily) {
       setState(() {
@@ -129,6 +152,7 @@ class _JoinFamilyScreenState extends State<JoinFamilyScreen> {
           arguments: {
             'mode': 'join',
             'inviteToken': token,
+            'inviteName': _preview?['nameHint'],
           },
         );
         return;

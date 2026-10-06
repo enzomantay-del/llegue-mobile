@@ -178,6 +178,7 @@ class SessionStore {
     await p.remove(_permissionsKey);
     await p.remove(_pendingInviteKey);
     await p.remove(_setupDoneKey);
+    await p.remove(_tripCreatorsKey);
     // device_id, bound_*, termsAccepted y keepAliveOnboardingSeen se conservan
   }
 

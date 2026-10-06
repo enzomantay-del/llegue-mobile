@@ -28,6 +28,8 @@ class PermissionsBlockedScreen extends StatelessWidget {
                 Text(
                   'Sin ubicación “Siempre” y avisos activados, Llegué no puede '
                   'avisar a tu familia con la app cerrada.\n\n'
+                  'En Xiaomi o Samsung, además: Ajustes → Batería → Llegué → '
+                  'Sin restricciones.\n\n'
                   'Activá los permisos en Ajustes y volvé.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontSize: 17,
