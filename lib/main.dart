@@ -41,18 +41,79 @@ Future<void> main() async {
   );
 
   final app = AppController();
-  await app.bootstrap();
+  runApp(_BootHost(controller: app));
+}
 
-  try {
-    final links = AppLinks();
-    final initial = await links.getInitialLink();
-    final token = inviteTokenFromUri(initial);
-    if (token != null && !app.hasFamily) {
-      await app.setPendingInvite(token);
+class _BootHost extends StatefulWidget {
+  const _BootHost({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_BootHost> createState() => _BootHostState();
+}
+
+class _BootHostState extends State<_BootHost> {
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_start());
+  }
+
+  Future<void> _start() async {
+    await widget.controller.bootstrap();
+    try {
+      final links = AppLinks();
+      final initial = await links.getInitialLink();
+      final token = inviteTokenFromUri(initial);
+      if (token != null && !widget.controller.hasFamily) {
+        await widget.controller.setPendingInvite(token);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _ready = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.brand(),
+        home: const Scaffold(
+          backgroundColor: Color(0xFF146B56),
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: Colors.white),
+                SizedBox(height: 18),
+                Text(
+                  'Conectando…',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(
+                    'Si el servidor estaba dormido, puede tardar un minuto. No se cierra tu sesión.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 15, height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
-  } catch (_) {}
-
-  runApp(LlegueApp(controller: app));
+    return LlegueApp(controller: widget.controller);
+  }
 }
 
 class LlegueApp extends StatefulWidget {

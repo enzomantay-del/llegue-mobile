@@ -20,7 +20,9 @@ class KeepAliveOnboardingScreen extends StatelessWidget {
           'el iPhone deja de avisar llegadas y salidas.';
     }
     return 'Dejá Llegué instalada. Si la cerrás a la fuerza o le sacás '
-        'el permiso de ubicación, tu familia deja de recibir avisos.';
+        'el permiso de ubicación, tu familia deja de recibir avisos.\n\n'
+        'En Xiaomi o Samsung: Ajustes → Batería → Llegué → Sin restricciones. '
+        'Si no, el celular apaga los avisos de llegada y salida.';
   }
 
   Future<void> _understood(BuildContext context) async {

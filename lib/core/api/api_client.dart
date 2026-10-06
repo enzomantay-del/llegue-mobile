@@ -33,7 +33,7 @@ class ApiClient {
   /// Si no hay, usa la IP local de la PC. Con hosting, pegá https://….onrender.com una vez.
   static const defaultBaseUrl = 'https://llegue-api.onrender.com';
   static const lanFallbackUrl = 'http://192.168.0.111:8787';
-  static const _timeout = Duration(seconds: 25);
+  static const _timeout = Duration(seconds: 45);
 
   String baseUrl;
   String? accessToken;
@@ -60,30 +60,44 @@ class ApiClient {
     return h;
   }
 
-  Future<http.Response> _send(Future<http.Response> future) async {
-    try {
-      return await future.timeout(_timeout);
-    } on TimeoutException {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
-    } on ApiException {
-      rethrow;
-    } on http.ClientException catch (_) {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
-    } catch (_) {
-      throw ApiException(
-        'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
-      );
+  /// Hasta 2 intentos. Render Free puede tardar ~1 min al despertar.
+  /// Un timeout NO es 401: no hay que borrar la sesión.
+  Future<http.Response> _send(Future<http.Response> Function() make) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await make().timeout(_timeout);
+      } on TimeoutException {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… El servidor tardó. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      } on ApiException {
+        rethrow;
+      } on http.ClientException {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… No llegamos al servidor. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      } catch (_) {
+        if (attempt == 1) {
+          throw ApiException(
+            'Conectando… No llegamos al servidor. Tu sesión sigue guardada. Probá de nuevo.',
+          );
+        }
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
+    throw ApiException(
+      'Conectando… El servidor tardó. Tu sesión sigue guardada. Probá de nuevo.',
+    );
   }
 
   /// Reintenta una vez si el access token venció. Un fallo de red en el
   /// refresh NO se convierte en 401 (no hay que borrar la sesión).
   Future<http.Response> _sendAuth(Future<http.Response> Function() send) async {
-    final res = await _send(send());
+    final res = await _send(send);
     if (res.statusCode != 401) return res;
     try {
       await refreshSession();
@@ -95,7 +109,7 @@ class ApiClient {
         'No pudimos conectar. Revisá tu conexión a internet e intentá de nuevo.',
       );
     }
-    return _send(send());
+    return _send(send);
   }
 
   bool get accessTokenNearExpiry {
@@ -148,8 +162,7 @@ class ApiClient {
     if (token == null || token.isEmpty) {
       throw ApiException('Tenés que iniciar sesión.', statusCode: 401);
     }
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/refresh'),
         headers: _headers(),
         body: jsonEncode({'refreshToken': token}),
@@ -188,7 +201,7 @@ class ApiClient {
     }
 
     try {
-      return await _send(once(baseUrl));
+      return await _send(() => once(baseUrl));
     } on ApiException {
       // Si falla el túnel/público, probá la red local de la PC.
       if (baseUrl != lanFallbackUrl && baseUrl != defaultBaseUrl) {
@@ -196,7 +209,7 @@ class ApiClient {
       }
       final alt = baseUrl == defaultBaseUrl ? lanFallbackUrl : defaultBaseUrl;
       try {
-        final res = await _send(once(alt));
+        final res = await _send(() => once(alt));
         baseUrl = alt;
         return res;
       } on ApiException {
@@ -231,8 +244,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> requestEmailOtp(String email) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/request-email-otp'),
         headers: _headers(),
         body: jsonEncode({'email': email}),
@@ -251,8 +263,7 @@ class ApiClient {
     required String installId,
     String platform = 'android',
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/register-titular'),
         headers: _headers(),
         body: jsonEncode({
@@ -279,8 +290,7 @@ class ApiClient {
     bool reassignDevice = false,
     String? inviteToken,
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/verify-otp'),
         headers: _headers(),
         body: jsonEncode({
@@ -304,8 +314,7 @@ class ApiClient {
     String platform = 'android',
     bool reassignDevice = false,
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/auth/login-with-pin'),
         headers: _headers(),
         body: jsonEncode({
@@ -324,8 +333,7 @@ class ApiClient {
     required String installId,
     required bool confirm,
   }) async {
-    final res = await _send(
-      http.post(
+    final res = await _send(() => http.post(
         _u('/devices/release'),
         headers: _headers(),
         body: jsonEncode({
@@ -339,7 +347,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>> lookupInstall(String installId) async {
     final res = await _send(
-      http.get(
+      () => http.get(
         _u('/devices/lookup?installId=${Uri.encodeComponent(installId)}'),
       ),
     );
@@ -419,7 +427,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getInvitation(String token) async {
-    final res = await _send(http.get(_u('/invitations/$token')));
+    final res = await _send(() => http.get(_u('/invitations/$token')));
     return _json(res);
   }
 
@@ -804,7 +812,7 @@ class ApiClient {
 
   Future<bool> ping() async {
     try {
-      final res = await _send(http.get(_u('/health')));
+      final res = await _send(() => http.get(_u('/health')));
       return res.statusCode == 200;
     } catch (_) {
       return false;

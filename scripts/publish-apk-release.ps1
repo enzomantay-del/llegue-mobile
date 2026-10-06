@@ -30,7 +30,7 @@ Write-Host "Publicando $tag ($ApkPath) ..."
 gh release create $tag $staged `
   --repo enzomantay-del/llegue-mobile `
   --title "Llegué $Version" `
-  --notes "Instalá ENCIMA de la versión anterior (no desinstales). La familia en el servidor no se borra con esta publicación." `
+  --notes "Misma firma que antes: actualizar no cierra la sesión. Para probar de cero, borrá los datos de Llegué y desinstalá antes de instalar." `
   --latest
 
 Write-Host "Listo. Descarga: https://github.com/enzomantay-del/llegue-mobile/releases/latest/download/Llegue.apk"
