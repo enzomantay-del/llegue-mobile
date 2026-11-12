@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../../core/state/app_controller.dart';
 import '../../core/widgets/app_background.dart';
-import 'permissions_location_screen.dart';
 
 class PermissionsBlockedScreen extends StatelessWidget {
   const PermissionsBlockedScreen({super.key});
@@ -12,7 +11,8 @@ class PermissionsBlockedScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.read<AppController>();
+    final app = context.watch<AppController>();
+    final kid = app.isKid;
     return AppBackground(
       child: Scaffold(
         appBar: AppBar(
@@ -26,11 +26,15 @@ class PermissionsBlockedScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Sin ubicación “Siempre” y avisos activados, Llegué no puede '
-                  'avisar a tu familia con la app cerrada.\n\n'
-                  'En Xiaomi o Samsung, además: Ajustes → Batería → Llegué → '
-                  'Sin restricciones.\n\n'
-                  'Activá los permisos en Ajustes y volvé.',
+                  kid
+                      ? 'Sin ubicación “Siempre”, Llegué no puede avisar a tu '
+                          'familia con la app cerrada.\n\n'
+                          'En Xiaomi o Samsung, además: Ajustes → Batería → '
+                          'Llegué → Sin restricciones.\n\n'
+                          'Activá la ubicación en Ajustes y volvé.'
+                      : 'Sin los avisos activados, no te enterás cuando tu '
+                          'hijo/a llega o sale.\n\n'
+                          'Activá los avisos de Llegué en Ajustes y volvé.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontSize: 17,
                         height: 1.4,
@@ -45,7 +49,7 @@ class PermissionsBlockedScreen extends StatelessWidget {
                 OutlinedButton(
                   onPressed: () {
                     Navigator.of(context).pushNamedAndRemoveUntil(
-                      PermissionsLocationScreen.route,
+                      app.permissionsEntryRoute,
                       (_) => false,
                     );
                   },

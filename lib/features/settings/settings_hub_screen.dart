@@ -3,10 +3,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/api/api_client.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
 import '../legal/terms_screen.dart';
+import '../onboarding/switch_person_dialog.dart';
 import '../onboarding/welcome_screen.dart';
 import 'alert_prefs_screen.dart';
 import 'help_screen.dart';
@@ -34,6 +36,30 @@ class _SettingsHubScreenState extends State<SettingsHubScreen> {
         _versionLabel = 'Versión ${info.version} (${info.buildNumber})';
       });
     });
+  }
+
+  Future<void> _switchPerson(BuildContext context) async {
+    final app = context.read<AppController>();
+    final from = (app.boundUserName ?? app.displayName).trim();
+    final ok = await confirmSwitchPerson(
+      context,
+      fromName: from.isEmpty ? 'esta persona' : from,
+    );
+    if (!ok || !context.mounted) return;
+    try {
+      await app.releaseDeviceForSomeoneElse();
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      WelcomeScreen.route,
+      (_) => false,
+    );
   }
 
   Future<void> _logout(BuildContext context) async {
@@ -166,6 +192,19 @@ class _SettingsHubScreenState extends State<SettingsHubScreen> {
                 onTap: () => Navigator.of(context).pushNamed(TermsScreen.route),
               ),
               const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: () => _switchPerson(context),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                ),
+                child: const Text(
+                  'Cambiar a otra persona en este celular',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () => _logout(context),
                 icon: const Icon(Icons.logout_rounded),

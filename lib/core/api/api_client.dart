@@ -262,6 +262,7 @@ class ApiClient {
     required String phoneCode,
     required String installId,
     String platform = 'android',
+    bool reassignDevice = false,
   }) async {
     final res = await _send(() => http.post(
         _u('/auth/register-titular'),
@@ -275,6 +276,7 @@ class ApiClient {
           'phoneCode': phoneCode,
           'installId': installId,
           'platform': platform,
+          if (reassignDevice) 'reassignDevice': true,
         }),
       ),
     );
@@ -333,9 +335,10 @@ class ApiClient {
     required String installId,
     required bool confirm,
   }) async {
-    final res = await _send(() => http.post(
+    // El servidor pide sesión: hay que soltar el celular antes de borrar el token.
+    final res = await _sendAuth(() => http.post(
         _u('/devices/release'),
-        headers: _headers(),
+        headers: _headers(auth: true),
         body: jsonEncode({
           'installId': installId,
           'confirm': confirm,
@@ -346,9 +349,11 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> lookupInstall(String installId) async {
-    final res = await _send(
+    // El servidor pide sesión y ya no devuelve el teléfono.
+    final res = await _sendAuth(
       () => http.get(
         _u('/devices/lookup?installId=${Uri.encodeComponent(installId)}'),
+        headers: _headers(auth: true),
       ),
     );
     return _json(res);

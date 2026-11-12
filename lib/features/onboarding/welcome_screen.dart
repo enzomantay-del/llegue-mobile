@@ -97,6 +97,23 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     setState(() => _checked = ok);
   }
 
+  Future<void> _switchPerson(AppController app) async {
+    final from = (app.boundUserName ?? app.displayName).trim();
+    final ok = await confirmSwitchPerson(
+      context,
+      fromName: from.isEmpty ? 'esta persona' : from,
+    );
+    if (!ok || !mounted) return;
+    try {
+      await app.releaseDeviceForSomeoneElse();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
   Future<void> _go(Future<void> Function() action) async {
     if (!_checked) {
       final ok = await _ensureTermsAccepted();
@@ -236,6 +253,13 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       },
                       child: const Text('Continuar'),
                     ),
+                    const SizedBox(height: 12),
+                    OutlinedButton(
+                      onPressed: () => _switchPerson(app),
+                      child: const Text(
+                        'Cambiar a otra persona en este celular',
+                      ),
+                    ),
                   ] else if (bound) ...[
                     FilledButton(
                       onPressed: _checked
@@ -254,24 +278,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     ),
                     const SizedBox(height: 12),
                     OutlinedButton(
-                      onPressed: _checked
-                          ? () => _go(() async {
-                                final from = app.boundUserName ?? 'esta persona';
-                                final ok = await confirmSwitchPerson(
-                                  context,
-                                  fromName: from,
-                                );
-                                if (!ok || !context.mounted) return;
-                                try {
-                                  await app.releaseDeviceForSomeoneElse();
-                                } on ApiException catch (e) {
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(e.message)),
-                                  );
-                                }
-                              })
-                          : null,
+                      onPressed: _checked ? () => _go(() => _switchPerson(app)) : null,
                       child: const Text('Cambiar a otra persona en este celular'),
                     ),
                   ] else ...[

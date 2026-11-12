@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../../core/api/api_client.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/widgets/app_background.dart';
-import '../onboarding/permissions_location_screen.dart';
 
 class CreateFamilyScreen extends StatefulWidget {
   const CreateFamilyScreen({super.key});
@@ -58,7 +57,7 @@ class _CreateFamilyScreenState extends State<CreateFamilyScreen> {
       );
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(
-        PermissionsLocationScreen.route,
+        app.permissionsEntryRoute,
         (_) => false,
       );
     } on ApiException catch (e) {

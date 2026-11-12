@@ -111,12 +111,7 @@ class _TitularOnboardingScreenState extends State<TitularOnboardingScreen> {
   Future<void> _requestPermissions() async {
     await _run(() async {
       final app = context.read<AppController>();
-      final status = await app.permissions.requestLocationChain();
-      if (status != 'always') {
-        if (!mounted) return;
-        Navigator.of(context).pushNamed(PermissionsBlockedScreen.route);
-        return;
-      }
+      // El titular es adulto: avisos sí, ubicación Siempre no.
       final notif = await app.permissions.requestNotifications();
       if (notif != 'granted') {
         if (!mounted) return;
@@ -124,9 +119,8 @@ class _TitularOnboardingScreenState extends State<TitularOnboardingScreen> {
         return;
       }
       await app.syncPermissions(
-        locationPermission: status,
+        locationPermission: await app.permissions.locationStatus(),
         notificationsPermission: notif,
-        locationOk: true,
         restartServices: false,
       );
       _next();
@@ -255,14 +249,14 @@ class _TitularOnboardingScreenState extends State<TitularOnboardingScreen> {
         return OnboardingStepBody(
           title: 'Permisos',
           subtitle:
-              'Ubicación “Siempre” y avisos: así Llegué te avisa solo '
-              'cuando tu hijo/a llega o sale.',
+              'Activá los avisos: así te enterás cuando tu hijo/a llega o sale. '
+              'Este celular no necesita ubicación todo el tiempo.',
           error: _error,
           busy: _busy,
           primaryLabel: 'Permitir y seguir',
           onPrimary: _requestPermissions,
           child: _infoCard(
-            'Sin estos permisos, la app no puede darte tranquilidad sola.',
+            'Sin los avisos, la app no te puede avisar a tiempo.',
           ),
         );
       case 4:

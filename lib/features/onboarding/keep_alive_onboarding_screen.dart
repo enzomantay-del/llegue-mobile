@@ -14,6 +14,24 @@ class KeepAliveOnboardingScreen extends StatelessWidget {
   static const route = '/onboarding-keep-alive';
 
   static String copyForPlatform(TargetPlatform platform) {
+    return copyFor(platform: platform, kid: true);
+  }
+
+  static String copyFor({
+    required TargetPlatform platform,
+    required bool kid,
+  }) {
+    if (!kid) {
+      if (platform == TargetPlatform.iOS) {
+        return 'Dejá Llegué instalada y no la cierres del todo. '
+            'Si la deslizás hacia arriba en el selector de apps, '
+            'podés dejar de recibir los avisos de tu familia.';
+      }
+      return 'Dejá Llegué instalada. El aviso fijo mantiene la app lista '
+          'para avisarte cuando llega o sale tu hijo/a.\n\n'
+          'Si la cerrás a la fuerza, los avisos pueden tardar. '
+          'En Xiaomi o Samsung: Ajustes → Batería → Llegué → Sin restricciones.';
+    }
     if (platform == TargetPlatform.iOS) {
       return 'Dejá Llegué instalada y no la cierres del todo. '
           'Si la deslizás hacia arriba en el selector de apps, '
@@ -67,7 +85,10 @@ class KeepAliveOnboardingScreen extends StatelessWidget {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Text(
-                      copyForPlatform(defaultTargetPlatform),
+                      copyFor(
+                        platform: defaultTargetPlatform,
+                        kid: context.watch<AppController>().isKid,
+                      ),
                       style: const TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 15,

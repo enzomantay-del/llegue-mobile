@@ -21,23 +21,45 @@ class _PermissionsNotificationsScreenState
     extends State<PermissionsNotificationsScreen> {
   bool _busy = false;
 
+  bool get _isKid {
+    try {
+      return context.watch<AppController>().isKid;
+    } on ProviderNotFoundException {
+      return false;
+    }
+  }
+
   Future<void> _continue() async {
     setState(() => _busy = true);
     final app = context.read<AppController>();
-    final location =
-        ModalRoute.of(context)?.settings.arguments as String? ?? 'while_in_use';
     final notif = await app.permissions.requestNotifications();
     if (!mounted) return;
+    await _finish(app, notif);
+  }
 
-    if (notif != 'granted') {
+  /// El hijo/a puede seguir sin avisos: la detección no depende de eso.
+  Future<void> _skipNotifications() async {
+    setState(() => _busy = true);
+    final app = context.read<AppController>();
+    await _finish(app, 'denied');
+  }
+
+  Future<void> _finish(AppController app, String notif) async {
+    final kid = app.isKid;
+    if (!kid && notif != 'granted') {
+      if (!mounted) return;
       setState(() => _busy = false);
       Navigator.of(context).pushNamed(PermissionsBlockedScreen.route);
       return;
     }
 
+    final location = kid
+        ? (ModalRoute.of(context)?.settings.arguments as String? ?? 'always')
+        : await app.permissions.locationStatus();
     final ready = await app.syncPermissions(
       locationPermission: location,
       notificationsPermission: notif,
+      locationOk: kid ? true : null,
     );
     if (!mounted) return;
     setState(() => _busy = false);
@@ -75,8 +97,11 @@ class _PermissionsNotificationsScreenState
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Para enterarte cuando tu hijo/a llega, sale o pide ayuda, '
-                        'activá los avisos de este celular.',
+                        _isKid
+                            ? 'Si querés, activá los avisos de este celular. '
+                                'No hace falta para avisar cuando llegás o salís.'
+                            : 'Para enterarte cuando tu hijo/a llega, sale o pide ayuda, '
+                                'activá los avisos de este celular.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Colors.white.withValues(alpha: 0.9),
                               fontSize: 16,
@@ -85,7 +110,9 @@ class _PermissionsNotificationsScreenState
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Cuando el celular pregunte, tocá “Permitir”.',
+                        _isKid
+                            ? 'Si los desactivás después, la detección sigue.'
+                            : 'Cuando el celular pregunte, tocá “Permitir”.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Colors.white,
                               fontWeight: FontWeight.w700,
@@ -95,7 +122,9 @@ class _PermissionsNotificationsScreenState
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Sin esto, no vas a ver los avisos a tiempo.',
+                        _isKid
+                            ? 'Podés seguir sin avisos.'
+                            : 'Sin esto, no vas a ver los avisos a tiempo.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Colors.white.withValues(alpha: 0.88),
                               fontWeight: FontWeight.w600,
@@ -111,6 +140,13 @@ class _PermissionsNotificationsScreenState
                   onPressed: _busy ? null : _continue,
                   child: Text(_busy ? 'Esperá…' : 'Activar avisos'),
                 ),
+                if (_isKid) ...[
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: _busy ? null : _skipNotifications,
+                    child: const Text('Seguir sin avisos'),
+                  ),
+                ],
               ],
             ),
           ),
