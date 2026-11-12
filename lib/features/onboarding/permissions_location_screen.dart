@@ -20,9 +20,30 @@ class PermissionsLocationScreen extends StatefulWidget {
 class _PermissionsLocationScreenState extends State<PermissionsLocationScreen> {
   bool _busy = false;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final app = context.read<AppController>();
+      // El adulto no necesita ubicación Siempre.
+      if (app.isAdult) {
+        Navigator.of(context).pushReplacementNamed(
+          PermissionsNotificationsScreen.route,
+        );
+      }
+    });
+  }
+
   Future<void> _continue() async {
-    setState(() => _busy = true);
     final app = context.read<AppController>();
+    if (app.isAdult) {
+      Navigator.of(context).pushReplacementNamed(
+        PermissionsNotificationsScreen.route,
+      );
+      return;
+    }
+    setState(() => _busy = true);
     final status = await app.permissions.requestLocationChain();
     if (!mounted) return;
     setState(() => _busy = false);

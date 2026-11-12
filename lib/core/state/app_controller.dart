@@ -78,6 +78,14 @@ class AppController extends ChangeNotifier {
   String? boundUserPhone;
   bool deviceBoundOnServer = false;
 
+  /// El servidor va a pedir sesión para soltar el celular. Si no hay token,
+  /// el próximo ingreso manda reassignDevice (la persona ya confirmó el cambio).
+  bool reassignPending = false;
+
+  /// Una vez por proceso: el server solo sella "está compartiendo" si los
+  /// avisos figuran granted. El hijo/a no los necesita.
+  bool _kidShareStamped = false;
+
   Timer? _pollTimer;
   Timer? _batteryTimer;
   Timer? _healthTimer;
@@ -115,6 +123,7 @@ class AppController extends ChangeNotifier {
     installId = await DeviceIdentity.getInstallId();
     boundUserName = await store.boundUserName;
     boundUserRole = await store.boundUserRole;
+    boundUserPhone = await store.boundUserPhone;
 
     // Fase de prueba: siempre el endpoint público actual (evita URLs viejas guardadas).
     api.baseUrl = ApiClient.defaultBaseUrl;
@@ -134,6 +143,7 @@ class AppController extends ChangeNotifier {
 
     await refreshDeviceBinding();
     await reconcileSessionWithServer();
+    await refreshPermissionGateFromDevice();
 
     debugPrint(
       '[llegue:bootstrap] after reconcile: loggedIn=$isLoggedIn '
@@ -355,6 +365,16 @@ class AppController extends ChangeNotifier {
 
   Future<void> refreshDeviceBinding() async {
     installId ??= await DeviceIdentity.getInstallId();
+    final hasSession =
+        api.accessToken != null && api.accessToken!.isNotEmpty;
+    // /devices/lookup pide sesión. Sin token usamos el nombre guardado en el
+    // celular (el lookup ya no trae el teléfono).
+    if (!hasSession) {
+      deviceBoundOnServer =
+          boundUserName != null && boundUserName!.trim().isNotEmpty;
+      notifyListeners();
+      return;
+    }
     try {
       final data = await api.lookupInstall(installId!);
       deviceBoundOnServer = data['bound'] == true;
@@ -362,8 +382,27 @@ class AppController extends ChangeNotifier {
         final u = Map<String, dynamic>.from(data['user'] as Map);
         boundUserName = u['name'] as String? ?? boundUserName;
         boundUserRole = u['role'] as String? ?? boundUserRole;
-        boundUserPhone = u['phone'] as String?;
-        await store.setBoundIdentity(name: boundUserName, role: boundUserRole);
+        final phone = u['phone'] as String?;
+        if (phone != null && phone.isNotEmpty) {
+          boundUserPhone = phone;
+        }
+        await store.setBoundIdentity(
+          name: boundUserName,
+          role: boundUserRole,
+          phone: boundUserPhone,
+        );
+      } else if (isLoggedIn) {
+        // Install nuevo (por ejemplo se dejó de usar Build.ID): todavía no
+        // está registrado, pero la sesión sigue siendo de esta persona.
+        deviceBoundOnServer = false;
+        boundUserName ??= user?['name'] as String?;
+        boundUserRole ??= user?['role'] as String?;
+        boundUserPhone ??= user?['phone'] as String?;
+        await store.setBoundIdentity(
+          name: boundUserName,
+          role: boundUserRole,
+          phone: boundUserPhone,
+        );
       } else {
         deviceBoundOnServer = false;
         boundUserName = null;
@@ -445,6 +484,7 @@ class AppController extends ChangeNotifier {
     required String phoneCode,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
+    final takeReassign = reassignPending;
     final data = await api.registerTitular(
       name: name,
       birthDate: birthDate,
@@ -454,7 +494,9 @@ class AppController extends ChangeNotifier {
       phoneCode: phoneCode,
       installId: installId!,
       platform: _platform,
+      reassignDevice: takeReassign,
     );
+    if (takeReassign) reassignPending = false;
     await _applyAuth(data);
     permissionsReady = false;
     await store.setPermissionsReady(false);
@@ -468,15 +510,17 @@ class AppController extends ChangeNotifier {
     String? inviteToken,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
+    final takeReassign = reassignDevice || reassignPending;
     final data = await api.verifyOtp(
       phone: phone,
       code: code,
       name: name,
       installId: installId!,
       platform: _platform,
-      reassignDevice: reassignDevice,
+      reassignDevice: takeReassign,
       inviteToken: inviteToken,
     );
+    if (takeReassign) reassignPending = false;
     await _applyAuth(data);
   }
 
@@ -486,13 +530,15 @@ class AppController extends ChangeNotifier {
     bool reassignDevice = false,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
+    final takeReassign = reassignDevice || reassignPending;
     final data = await api.loginWithPin(
       inviteTokenOrCode: inviteTokenOrCode,
       pin: pin,
       installId: installId!,
       platform: _platform,
-      reassignDevice: reassignDevice,
+      reassignDevice: takeReassign,
     );
+    if (takeReassign) reassignPending = false;
     await _applyAuth(data);
     permissionsReady = false;
     await store.setPermissionsReady(false);
@@ -567,13 +613,15 @@ class AppController extends ChangeNotifier {
     bool reassignDevice = false,
   }) async {
     installId ??= await DeviceIdentity.getInstallId();
+    final takeReassign = reassignDevice || reassignPending;
     final data = await api.acceptInvitation(
       token,
       pin: pin,
       installId: installId!,
       platform: _platform,
-      reassignDevice: reassignDevice,
+      reassignDevice: takeReassign,
     );
+    if (takeReassign) reassignPending = false;
     await _applyAuth(data);
     pendingInviteToken = null;
     await store.setPendingInvite(null);
@@ -583,8 +631,38 @@ class AppController extends ChangeNotifier {
 
   Future<void> releaseDeviceForSomeoneElse() async {
     installId ??= await DeviceIdentity.getInstallId();
-    await api.releaseDevice(installId: installId!, confirm: true);
-    final showLogin = bootstrapped && isLoggedIn;
+    final hasSession =
+        api.accessToken != null && api.accessToken!.isNotEmpty;
+    if (!hasSession) {
+      await _armReassignWithoutSession();
+      return;
+    }
+    try {
+      await api.releaseDevice(installId: installId!, confirm: true);
+    } on ApiException catch (e) {
+      if (!e.isUnauthorized) rethrow;
+      // La sesión no alcanzó para soltar el celular. El próximo ingreso
+      // reasigna el aparato: la persona ya confirmó el cambio.
+      reassignPending = true;
+      await _clearLocalAfterRelease(redirectIfLoggedIn: true);
+      return;
+    }
+    reassignPending = false;
+    await _clearLocalAfterRelease(redirectIfLoggedIn: true);
+  }
+
+  Future<void> _armReassignWithoutSession() async {
+    reassignPending = true;
+    deviceBoundOnServer = false;
+    boundUserName = null;
+    boundUserRole = null;
+    boundUserPhone = null;
+    await store.clearBoundIdentity();
+    notifyListeners();
+  }
+
+  Future<void> _clearLocalAfterRelease({required bool redirectIfLoggedIn}) async {
+    final showLogin = redirectIfLoggedIn && bootstrapped && isLoggedIn;
     await _wipeLocalSession();
     boundUserName = null;
     boundUserRole = null;
@@ -621,17 +699,58 @@ class AppController extends ChangeNotifier {
   }) async {
     await ensureDeviceRegistered();
     final deviceId = await store.deviceId;
-    final data = await api.patchPermissions(
+    // El servidor marca "está compartiendo" solo si hay Siempre Y avisos.
+    // Al hijo/a le alcanza la ubicación. Si los avisos están apagados,
+    // primero sellamos el dispositivo (el server no borra ese sello) y
+    // después guardamos el estado real, para que el adulto vea "Sin avisos"
+    // y no "Todavía no está compartiendo".
+    if (isKid &&
+        locationPermission == 'always' &&
+        notificationsPermission != 'granted' &&
+        !_kidShareStamped) {
+      await api.patchPermissions(
+        locationPermission: locationPermission,
+        notificationsPermission: 'granted',
+        deviceId: deviceId,
+        locationOk: locationOk,
+      );
+      _kidShareStamped = true;
+    }
+    await api.patchPermissions(
       locationPermission: locationPermission,
       notificationsPermission: notificationsPermission,
       deviceId: deviceId,
       locationOk: locationOk,
     );
-    permissionsReady = data['permissionsReady'] == true;
+    final next = permissionsReadyForRole(
+      kid: isKid,
+      locationPermission: locationPermission,
+      notificationsPermission: notificationsPermission,
+    );
+    final changed = next != permissionsReady;
+    permissionsReady = next;
     await store.setPermissionsReady(permissionsReady);
     notifyListeners();
-    if (restartServices) await syncRuntimeServices();
+    if (restartServices || changed) await syncRuntimeServices();
     return permissionsReady;
+  }
+
+  /// Relee los permisos del sistema. El hijo/a no vuelve a la pantalla de
+  /// permisos solo porque apagó los avisos. El adulto no necesita Siempre.
+  Future<void> refreshPermissionGateFromDevice() async {
+    if (!isLoggedIn || !hasFamily) return;
+    try {
+      final loc = await permissions.locationStatus();
+      final notif = await permissions.notificationsStatus();
+      final next = permissionsReadyForRole(
+        kid: isKid,
+        locationPermission: loc,
+        notificationsPermission: notif,
+      );
+      if (next == permissionsReady) return;
+      permissionsReady = next;
+      await store.setPermissionsReady(next);
+    } catch (_) {}
   }
 
   Future<void> reportDeviceHealth() async {
@@ -717,13 +836,23 @@ class AppController extends ChangeNotifier {
       return;
     }
 
-    _syncGeofencePlaces();
-    if (!geofence.running) {
-      await geofence.start();
-      monitoring = geofence.running;
-      geofenceStatus = geofence.running
-          ? (places.isEmpty ? 'Falta agregar lugares' : 'Detección activa')
-          : (geofence.lastError ?? 'Detección pausada');
+    // Solo el celular del hijo/a detecta llegadas y salidas. El adulto
+    // no prende GPS ni pide ubicación Siempre; el aviso fijo lo mantiene
+    // despierto para el poll de 3 segundos.
+    if (isKid) {
+      _syncGeofencePlaces();
+      if (!geofence.running) {
+        await geofence.start();
+        monitoring = geofence.running;
+        geofenceStatus = geofence.running
+            ? (places.isEmpty ? 'Falta agregar lugares' : 'Detección activa')
+            : (geofence.lastError ?? 'Detección pausada');
+        notifyListeners();
+      }
+    } else if (geofence.running) {
+      await geofence.stop();
+      monitoring = false;
+      geofenceStatus = 'Detección pausada';
       notifyListeners();
     }
 
@@ -1266,7 +1395,14 @@ class AppController extends ChangeNotifier {
     }
     boundUserName = user?['name'] as String?;
     boundUserRole = user?['role'] as String?;
+    final phone = user?['phone'] as String?;
+    if (phone != null && phone.isNotEmpty) boundUserPhone = phone;
     deviceBoundOnServer = true;
+    await store.setBoundIdentity(
+      name: boundUserName,
+      role: boundUserRole,
+      phone: boundUserPhone,
+    );
     await store.saveAuth(
       accessToken: api.accessToken!,
       refreshToken: data['refreshToken'] as String? ?? '',
@@ -1275,6 +1411,10 @@ class AppController extends ChangeNotifier {
     );
     notifyListeners();
   }
+
+  /// Hijo/a: ubicación Siempre. Adulto: avisos (no ubicación Siempre).
+  String get permissionsEntryRoute =>
+      isKid ? '/permissions-location' : '/permissions-notifications';
 
   String get startRoute {
     if (!isLoggedIn) {
@@ -1289,7 +1429,7 @@ class AppController extends ChangeNotifier {
       }
       return '/create-family';
     }
-    if (!permissionsReady) return '/permissions-location';
+    if (!permissionsReady) return permissionsEntryRoute;
     if (!keepAliveOnboardingSeen) return '/onboarding-keep-alive';
     if (isAdult && !setupChecklistDone) return '/setup-checklist';
     return '/home';

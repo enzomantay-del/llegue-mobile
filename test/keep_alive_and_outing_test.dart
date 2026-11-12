@@ -24,6 +24,12 @@ void main() {
       KeepAliveOnboardingScreen.copyForPlatform(TargetPlatform.android),
       contains('cerrás a la fuerza'),
     );
+    final adult = KeepAliveOnboardingScreen.copyFor(
+      platform: TargetPlatform.android,
+      kid: false,
+    );
+    expect(adult, contains('aviso fijo'));
+    expect(adult.contains('permiso de ubicación'), isFalse);
   });
 
   test('SharedPreferences guarda que ya vio la pantalla', () async {

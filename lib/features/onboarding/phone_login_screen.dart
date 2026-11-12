@@ -6,7 +6,6 @@ import '../../core/state/app_controller.dart';
 import '../../core/widgets/app_background.dart';
 import '../family_setup/create_family_screen.dart';
 import '../family_setup/join_family_screen.dart';
-import 'permissions_location_screen.dart';
 import 'switch_person_dialog.dart';
 
 class PhoneLoginScreen extends StatefulWidget {
@@ -145,7 +144,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
             await app.acceptInvitation(inviteToken);
             if (!mounted) return;
             Navigator.of(context).pushNamedAndRemoveUntil(
-              PermissionsLocationScreen.route,
+              app.permissionsEntryRoute,
               (_) => false,
             );
             return;
@@ -183,7 +182,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         );
       } else if (!app.permissionsReady) {
         Navigator.of(context).pushNamedAndRemoveUntil(
-          PermissionsLocationScreen.route,
+          app.permissionsEntryRoute,
           (_) => false,
         );
       } else {

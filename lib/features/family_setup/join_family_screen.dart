@@ -6,7 +6,6 @@ import '../../core/invite_links.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
-import '../onboarding/permissions_location_screen.dart';
 import '../onboarding/phone_login_screen.dart';
 import '../onboarding/switch_person_dialog.dart';
 
@@ -135,10 +134,11 @@ class _JoinFamilyScreenState extends State<JoinFamilyScreen> {
         await app.loginWithPin(
           inviteTokenOrCode: token,
           pin: _pin.text.trim(),
+          reassignDevice: app.reassignPending,
         );
         if (!mounted) return;
         Navigator.of(context).pushNamedAndRemoveUntil(
-          PermissionsLocationScreen.route,
+          app.permissionsEntryRoute,
           (_) => false,
         );
         return;
@@ -162,18 +162,64 @@ class _JoinFamilyScreenState extends State<JoinFamilyScreen> {
       await app.acceptInvitation(
         token,
         pin: _usePinOnly ? _pin.text.trim() : null,
+        reassignDevice: app.reassignPending,
       );
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(
-        PermissionsLocationScreen.route,
+        app.permissionsEntryRoute,
         (_) => false,
       );
     } on ApiException catch (e) {
+      if (e.isDeviceBound && mounted) {
+        final switched = await _retryAfterDeviceBound(app, token, e);
+        if (switched) return;
+      }
       setState(() => _error = e.message);
     } catch (_) {
       setState(() => _error = 'No pudimos unirte. Probá de nuevo.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// El release pide sesión. Si el celular sigue atado, el ingreso reasigna.
+  Future<bool> _retryAfterDeviceBound(
+    AppController app,
+    String token,
+    ApiException error,
+  ) async {
+    final ok = await confirmSwitchPerson(
+      context,
+      fromName: error.boundUserName ?? app.boundUserName ?? 'otra persona',
+      toName: _preview?['nameHint'] as String?,
+    );
+    if (!ok || !mounted) return false;
+    try {
+      if (_usePinOnly && !app.isLoggedIn) {
+        await app.loginWithPin(
+          inviteTokenOrCode: token,
+          pin: _pin.text.trim(),
+          reassignDevice: true,
+        );
+      } else if (app.isLoggedIn) {
+        await app.acceptInvitation(
+          token,
+          pin: _usePinOnly ? _pin.text.trim() : null,
+          reassignDevice: true,
+        );
+      } else {
+        return false;
+      }
+      if (!mounted) return true;
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        app.permissionsEntryRoute,
+        (_) => false,
+      );
+      return true;
+    } on ApiException catch (e) {
+      if (!mounted) return true;
+      setState(() => _error = e.message);
+      return true;
     }
   }
 

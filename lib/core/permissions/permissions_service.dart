@@ -4,6 +4,18 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 
+/// El hijo/a solo necesita ubicación Siempre: los avisos no frenan la
+/// detección. El adulto necesita avisos (así le llegan las alertas hoy) y
+/// no ubicación Siempre.
+bool permissionsReadyForRole({
+  required bool kid,
+  required String locationPermission,
+  required String notificationsPermission,
+}) {
+  if (kid) return locationPermission == 'always';
+  return notificationsPermission == 'granted';
+}
+
 class PermissionsService {
   Future<String> locationStatus() async {
     if (kIsWeb) return 'while_in_use';

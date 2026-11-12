@@ -17,6 +17,7 @@ class SessionStore {
   static const _pendingInviteKey = 'pending_invite';
   static const _boundNameKey = 'bound_user_name';
   static const _boundRoleKey = 'bound_user_role';
+  static const _boundPhoneKey = 'bound_user_phone';
   static const _setupDoneKey = 'setup_checklist_done';
   static const _termsAcceptedKey = 'terms_accepted_v1';
   static const _keepAliveSeenKey = 'keep_alive_onboarding_seen_v1';
@@ -40,8 +41,12 @@ class SessionStore {
     }
     final name = user['name'] as String?;
     final role = user['role'] as String?;
+    final phone = user['phone'] as String?;
     if (name != null) await p.setString(_boundNameKey, name);
     if (role != null) await p.setString(_boundRoleKey, role);
+    if (phone != null && phone.isNotEmpty) {
+      await p.setString(_boundPhoneKey, phone);
+    }
   }
 
   Future<void> saveUser(Map<String, dynamic> user) async {
@@ -50,8 +55,12 @@ class SessionStore {
     await _writeUserIds(p, user: user);
     final name = user['name'] as String?;
     final role = user['role'] as String?;
+    final phone = user['phone'] as String?;
     if (name != null) await p.setString(_boundNameKey, name);
     if (role != null) await p.setString(_boundRoleKey, role);
+    if (phone != null && phone.isNotEmpty) {
+      await p.setString(_boundPhoneKey, phone);
+    }
   }
 
   Future<void> saveFamily(Map<String, dynamic>? family) async {
@@ -139,6 +148,9 @@ class SessionStore {
   Future<String?> get boundUserRole async =>
       (await _p).getString(_boundRoleKey);
 
+  Future<String?> get boundUserPhone async =>
+      (await _p).getString(_boundPhoneKey);
+
   Future<void> setSetupChecklistDone(bool value) async {
     await (await _p).setBool(_setupDoneKey, value);
   }
@@ -196,16 +208,24 @@ class SessionStore {
     final p = await _p;
     await p.remove(_boundNameKey);
     await p.remove(_boundRoleKey);
+    await p.remove(_boundPhoneKey);
     await p.remove(_deviceIdKey);
   }
 
-  Future<void> setBoundIdentity({String? name, String? role}) async {
+  Future<void> setBoundIdentity({
+    String? name,
+    String? role,
+    String? phone,
+  }) async {
     final p = await _p;
     if (name != null && name.isNotEmpty) {
       await p.setString(_boundNameKey, name);
     }
     if (role != null && role.isNotEmpty) {
       await p.setString(_boundRoleKey, role);
+    }
+    if (phone != null && phone.isNotEmpty) {
+      await p.setString(_boundPhoneKey, phone);
     }
   }
 
