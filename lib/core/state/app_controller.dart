@@ -5,16 +5,21 @@ import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api/api_client.dart';
 import '../copy/outing_copy.dart';
+import '../device/detection_health.dart';
 import '../device/device_identity.dart';
+import '../geofence/geofence_events.dart';
 import '../geofence/geofence_monitor.dart';
+import '../keepalive/keep_alive_host.dart';
+import '../keepalive/plugin_keep_alive.dart';
+import '../notifications/alert_inbox.dart';
 import '../notifications/local_alerts.dart';
 import '../notifications/push_service.dart';
 import '../permissions/permissions_service.dart';
 import '../storage/session_store.dart';
+import '../trips/trip_conflict.dart';
 
 class AppController extends ChangeNotifier {
   AppController({
@@ -24,19 +29,26 @@ class AppController extends ChangeNotifier {
     LocalAlerts? alerts,
     GeofenceMonitor? geofence,
     PushService? push,
+    KeepAliveHost? keepAlive,
   }) : api = api ?? ApiClient(),
        store = store ?? SessionStore(),
        permissions = permissions ?? PermissionsService(),
-       alerts = alerts ?? LocalAlerts() {
-    this.geofence =
+       alerts = alerts ?? LocalAlerts(),
+       keepAlive = keepAlive ?? PluginKeepAliveHost() {
+    final monitor =
         geofence ??
         GeofenceMonitor(
-          onTransition: _onGeofenceTransition,
           onStatus: (status) {
             geofenceStatus = status;
             notifyListeners();
           },
         );
+    monitor.onTransition = _onGeofenceTransition;
+    monitor.onStatus ??= (status) {
+      geofenceStatus = status;
+      notifyListeners();
+    };
+    this.geofence = monitor;
     this.push = push ?? PushService(alerts: this.alerts);
     this.api.onTokensRefreshed = _persistRefreshedTokens;
   }
@@ -47,6 +59,7 @@ class AppController extends ChangeNotifier {
   final LocalAlerts alerts;
   late final GeofenceMonitor geofence;
   late final PushService push;
+  final KeepAliveHost keepAlive;
   final Battery _battery = Battery();
 
   Map<String, dynamic>? user;
@@ -90,9 +103,14 @@ class AppController extends ChangeNotifier {
   Timer? _batteryTimer;
   Timer? _healthTimer;
   Timer? _kidBackgroundTimer;
-  final Set<String> _seenNotificationIds = {};
-  bool _alertsPrimed = false;
+  Timer? _watchdogTimer;
   DateTime? _lastLowBatterySent;
+  bool _inForeground = true;
+  bool taskDetectionRunning = false;
+  bool keepAliveServiceStarted = false;
+  String? lastDetectionError;
+  bool? batteryUnrestricted;
+  DateTime _suppressDetectionWarningUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   String get _platform =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -111,6 +129,28 @@ class AppController extends ChangeNotifier {
   bool get isKid => user?['role'] == 'kid';
   bool get isAdult =>
       user?['role'] == 'adult' || user?['role'] == 'admin_adult';
+
+  /// El hijo/a ve esto en Inicio cuando la detección no está corriendo.
+  bool get showDetectionOff => detectionLooksOff(
+        kid: isKid,
+        permissionsReady: permissionsReady,
+        inProcessRunning: geofence.running,
+        taskRunning: taskDetectionRunning,
+        hasStartError:
+            !geofence.running &&
+            !taskDetectionRunning &&
+            (geofence.lastError != null || lastDetectionError != null),
+        now: DateTime.now(),
+        suppressUntil: _suppressDetectionWarningUntil,
+      );
+
+  bool get detectionRunning => geofence.running || taskDetectionRunning;
+
+  String get detectionBannerTitle {
+    if (showDetectionOff) return 'Detección apagada';
+    if (detectionRunning) return 'Detección activa';
+    return 'Activando detección';
+  }
 
   String get displayName =>
       (user?['name'] as String?)?.trim().isNotEmpty == true
@@ -438,8 +478,8 @@ class AppController extends ChangeNotifier {
     boundUserRole = null;
     boundUserPhone = null;
     deviceBoundOnServer = false;
-    _seenNotificationIds.clear();
-    _alertsPrimed = false;
+    lastDetectionError = null;
+    taskDetectionRunning = false;
     await store.clearAllLocal(keepBaseUrl: true);
     installId = await DeviceIdentity.resetInstallId();
     notifyListeners();
@@ -770,7 +810,8 @@ class AppController extends ChangeNotifier {
 
   Future<void> refreshFamilyStatus() async {
     if (!hasFamily) return;
-    final data = await api.familyStatus();
+    final since = await _notificationsSince();
+    final data = await api.familyStatus(notificationsSince: since);
     family = Map<String, dynamic>.from(data['family'] as Map);
     members = (data['members'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
@@ -787,6 +828,11 @@ class AppController extends ChangeNotifier {
     notifications = (data['notifications'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+    notifications.sort((a, b) {
+      final as = a['createdAt'] as String? ?? a['sentAt'] as String? ?? '';
+      final bs = b['createdAt'] as String? ?? b['sentAt'] as String? ?? '';
+      return bs.compareTo(as);
+    });
 
     for (var i = 0; i < members.length; i++) {
       final m = members[i];
@@ -817,6 +863,7 @@ class AppController extends ChangeNotifier {
 
     _syncGeofencePlaces();
     await _notifyNewAdultAlerts();
+    await _advanceNotificationCursor();
     await store.saveFamily(family);
     await store.savePlaces(places, pendingPlaces: pendingPlaces);
     // Familia ya armada (seed): no forzar checklist
@@ -836,25 +883,53 @@ class AppController extends ChangeNotifier {
       return;
     }
 
-    // Solo el celular del hijo/a detecta llegadas y salidas. El adulto
-    // no prende GPS ni pide ubicación Siempre; el aviso fijo lo mantiene
-    // despierto para el poll de 3 segundos.
+    _suppressDetectionWarningUntil =
+        DateTime.now().add(const Duration(seconds: 20));
+
+    // El hijo/a detecta con un servicio de ubicación. El adulto no prende GPS:
+    // un servicio en primer plano (sin ubicación) mantiene el poll y los avisos
+    // con la pantalla apagada. Sin Firebase, si el proceso muere no hay avisos.
     if (isKid) {
+      try {
+        await ensureDeviceRegistered().timeout(const Duration(seconds: 8));
+      } catch (e) {
+        debugPrint('device register before detection: $e');
+      }
       _syncGeofencePlaces();
-      if (!geofence.running) {
+      final started = await keepAlive.start(kid: true);
+      keepAliveServiceStarted = started;
+      if (started) {
+        // El servicio es el dueño del GPS. No abrimos un segundo stream.
+        if (geofence.running) await geofence.stop();
+        monitoring = taskDetectionRunning;
+        if (!taskDetectionRunning && geofence.lastError == null) {
+          geofenceStatus = 'Activando detección';
+        }
+      } else if (!geofence.running) {
         await geofence.start();
         monitoring = geofence.running;
         geofenceStatus = geofence.running
             ? (places.isEmpty ? 'Falta agregar lugares' : 'Detección activa')
-            : (geofence.lastError ?? 'Detección pausada');
-        notifyListeners();
+            : (geofence.lastError ?? 'Detección apagada');
       }
-    } else if (geofence.running) {
-      await geofence.stop();
+      unawaited(flushPendingGeofenceEvents(api, store));
+    } else {
+      if (geofence.running) await geofence.stop();
       monitoring = false;
-      geofenceStatus = 'Detección pausada';
-      notifyListeners();
+      final started = await keepAlive.start(kid: false);
+      keepAliveServiceStarted = started;
+      if (started) {
+        await alerts.stopListeningOngoing();
+        geofenceStatus = 'Avisos en segundo plano';
+      } else {
+        unawaited(alerts.showListeningOngoing());
+        geofenceStatus = 'Detección pausada';
+      }
+      if (push.ready && push.token != null) {
+        unawaited(ensureDeviceRegistered());
+      }
     }
+    notifyListeners();
 
     _pollTimer ??= Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
@@ -869,21 +944,73 @@ class AppController extends ChangeNotifier {
     _healthTimer ??= Timer.periodic(const Duration(seconds: 45), (_) {
       unawaited(reportDeviceHealth());
     });
+    _watchdogTimer ??= Timer.periodic(const Duration(seconds: 45), (_) {
+      unawaited(_watchdogTick());
+    });
     unawaited(_reportBattery());
     unawaited(reportDeviceHealth());
-    if (isAdult) {
-      unawaited(alerts.showListeningOngoing());
-      try {
-        await WakelockPlus.enable();
-      } catch (_) {}
-      // Re-registrar token FCM si Firebase ya está listo
-      if (push.ready && push.token != null) {
-        unawaited(ensureDeviceRegistered());
-      }
-    }
+    unawaited(_refreshBatteryExemption());
     if (isKid) {
       unawaited(reportPresence(state: 'foreground'));
     }
+  }
+
+  Future<void> _watchdogTick() async {
+    if (!isLoggedIn || !hasFamily || !permissionsReady) return;
+    if (isKid) {
+      final serviceUp = await keepAlive.isServiceRunning();
+      keepAliveServiceStarted = serviceUp;
+      if (shouldRestartInProcessDetection(
+        serviceRunning: serviceUp,
+        inProcessRunning: geofence.running,
+      )) {
+        await geofence.start();
+        monitoring = geofence.running;
+        geofenceStatus = geofence.running
+            ? 'Detección activa'
+            : (geofence.lastError ?? 'Detección apagada');
+        notifyListeners();
+      }
+      await flushPendingGeofenceEvents(api, store);
+      return;
+    }
+    final serviceUp = await keepAlive.isServiceRunning();
+    keepAliveServiceStarted = serviceUp;
+    if (!serviceUp) {
+      final started = await keepAlive.start(kid: false);
+      keepAliveServiceStarted = started;
+      if (!started) unawaited(alerts.showListeningOngoing());
+    }
+  }
+
+  /// Lo llama el botón de Inicio cuando la detección está apagada.
+  Future<void> restartDetection() async {
+    _suppressDetectionWarningUntil =
+        DateTime.now().add(const Duration(seconds: 12));
+    taskDetectionRunning = false;
+    if (geofence.running) await geofence.stop();
+    await syncRuntimeServices();
+  }
+
+  Future<void> _refreshBatteryExemption() async {
+    final next = await keepAlive.isIgnoringBatteryOptimizations();
+    if (next == batteryUnrestricted) return;
+    batteryUnrestricted = next;
+    notifyListeners();
+  }
+
+  void onKeepAliveMessage(Object data) {
+    if (data is! Map) return;
+    if (data['type'] != 'detection') return;
+    taskDetectionRunning = data['running'] == true;
+    final status = data['status'];
+    if (status is String && status.isNotEmpty) geofenceStatus = status;
+    if (data.containsKey('error')) {
+      final err = data['error'];
+      lastDetectionError = err is String && err.isNotEmpty ? err : null;
+    }
+    monitoring = taskDetectionRunning || geofence.running;
+    notifyListeners();
   }
 
   Future<void> stopRuntimeServices() async {
@@ -895,11 +1022,13 @@ class AppController extends ChangeNotifier {
     _healthTimer = null;
     _kidBackgroundTimer?.cancel();
     _kidBackgroundTimer = null;
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
     await geofence.stop();
+    await keepAlive.stop();
+    keepAliveServiceStarted = false;
+    taskDetectionRunning = false;
     await alerts.stopListeningOngoing();
-    try {
-      await WakelockPlus.disable();
-    } catch (_) {}
     monitoring = false;
     geofenceStatus = 'Detección pausada';
     notifyListeners();
@@ -914,117 +1043,84 @@ class AppController extends ChangeNotifier {
           )
         : places;
     geofence.updatePlaces(watched);
+    if (!isKid || !keepAliveServiceStarted) return;
+    keepAlive.sendToTask({
+      'type': 'places',
+      'tripId': activeTrip?['id'],
+      'destinationPlaceId': activeTrip?['destinationPlaceId'],
+      'places': [
+        for (final place in watched)
+          {
+            'id': place['id'],
+            'name': place['name'],
+            'lat': place['lat'],
+            'lng': place['lng'],
+            'radiusM': place['radiusM'],
+            'status': 'active',
+          },
+      ],
+    });
   }
 
   Future<void> _onGeofenceTransition(GeofenceTransition t) async {
     // Solo el celular del hijo/a genera llegadas y salidas.
     if (!isKid) return;
+    final tripId = activeTrip?['id'] as String?;
+    final destRaw = activeTrip?['destinationPlaceId'];
+    final dest = destRaw is String && destRaw.isNotEmpty ? destRaw : null;
     try {
-      final tripId = activeTrip?['id'] as String?;
-      await api.postEvent(
-        type: t.type,
-        placeId: t.placeId,
+      await postGeofenceTransition(
+        api: api,
+        transition: t,
         tripId: tripId,
-        forceNotify: true,
-        payload: {
-          'source': 'geofence',
-          'lat': t.lat,
-          'lng': t.lng,
-          if (tripId != null) 'tripId': tripId,
-          if (activeTrip?['destinationPlaceId'] != null)
-            'destinationPlaceId': activeTrip!['destinationPlaceId'],
-        },
+        destinationPlaceId: dest,
       );
+      lastDetectionError = null;
       await refreshFamilyStatus();
-      // El adulto recibe el aviso por poll/push. Al hijo no le saturamos el celular.
     } catch (e) {
+      await store.enqueuePendingGeofenceEvent(
+        pendingFromTransition(
+          t,
+          tripId: tripId,
+          destinationPlaceId: dest,
+        ),
+      );
+      lastDetectionError = t.type == 'arrival'
+          ? 'No pudimos avisar la llegada. Reintentamos.'
+          : 'No pudimos avisar la salida. Reintentamos.';
       debugPrint('Geofence event failed: $e');
+      notifyListeners();
     }
   }
 
-  String? _formatClock(String? iso) {
-    if (iso == null || iso.isEmpty) return null;
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return null;
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '$h:$m';
-  }
+  @visibleForTesting
+  Future<void> debugHandleTransition(GeofenceTransition transition) =>
+      _onGeofenceTransition(transition);
+
+  @visibleForTesting
+  Future<void> debugFlushPendingEvents() =>
+      flushPendingGeofenceEvents(api, store);
 
   Future<void> _notifyNewAdultAlerts() async {
-    if (!_alertsPrimed) {
-      for (final n in notifications) {
-        final id = n['id'] as String?;
-        if (id != null) _seenNotificationIds.add(id);
-      }
-      for (final e in recentEvents) {
-        final id = e['id'] as String?;
-        if (id != null) _seenNotificationIds.add('ev-$id');
-      }
-      _alertsPrimed = true;
-      return;
-    }
-
-    if (isAdult) {
-      for (final n in notifications.reversed) {
-        final id = n['id'] as String?;
-        if (id == null || _seenNotificationIds.contains(id)) continue;
-        _seenNotificationIds.add(id);
-        final title = n['title'] as String? ?? 'Llegué';
-        var body = n['body'] as String? ?? 'Hay un aviso nuevo';
-        final iso = n['createdAt'] as String? ?? n['sentAt'] as String?;
-        final clock = _formatClock(iso);
-        final eventTime = iso == null
-            ? null
-            : DateTime.tryParse(iso)?.toLocal();
-        // Hora del hecho al frente, para que el padre se guíe aunque el aviso llegue tarde.
-        if (clock != null && !body.contains(clock)) {
-          body = '$clock · $body';
-        }
-        body = formatFamilyMessage(body);
-        final lower = '${title.toLowerCase()} ${body.toLowerCase()}';
-        final urgent =
-            lower.contains('ayuda') ||
-            lower.contains('llegó') ||
-            lower.contains('salió') ||
-            lower.contains('regresa') ||
-            lower.contains('va a') ||
-            lower.contains('demora') ||
-            lower.contains('batería') ||
-            lower.contains('ubicación') ||
-            lower.contains('cerró') ||
-            lower.contains('suger') ||
-            lower.contains('casa');
-        await alerts.show(
-          title: title,
-          body: body,
-          urgent: urgent,
-          eventTime: eventTime,
-          payload: _payloadForNotice(title: title, body: body, notice: n),
-        );
-      }
-      return;
-    }
-
-    // Hijo/a: SOLO aceptaciones del adulto (lugar o salida armada).
-    for (final n in notifications.reversed) {
-      final id = n['id'] as String?;
-      if (id == null || _seenNotificationIds.contains(id)) continue;
-      _seenNotificationIds.add(id);
-      final title = (n['title'] as String? ?? '').toLowerCase();
-      final body = (n['body'] as String? ?? '').toLowerCase();
-      final allowed =
-          title.contains('lugar') ||
-          title.contains('salida') ||
-          body.contains('acept') ||
-          body.contains('armar') ||
-          body.contains('podés usar');
-      if (!allowed) continue;
-      await alerts.show(
-        title: n['title'] as String? ?? 'Llegué',
-        body: formatFamilyMessage(n['body'] as String? ?? 'Hay una novedad'),
-      );
-    }
+    // Con la pantalla apagada avisa el servicio. No marcar vistos acá:
+    // si el servicio no llegó a mostrarlos, aparecen al volver.
+    if (!_inForeground && keepAliveServiceStarted) return;
+    await deliverPlannedAlerts(
+      store: store,
+      alerts: alerts,
+      notifications: notifications,
+      kid: isKid,
+      formatBody: (notice) => formatFamilyMessage(
+        notice['body'] as String? ?? 'Hay un aviso nuevo',
+        kidId: notice['kidId'] as String?,
+        event: notice,
+      ),
+      payloadFor: (notice) => _payloadForNotice(
+        title: notice['title'] as String? ?? 'Llegué',
+        body: notice['body'] as String? ?? '',
+        notice: notice,
+      ),
+    );
   }
 
   Future<void> _reportBattery() async {
@@ -1061,7 +1157,11 @@ class AppController extends ChangeNotifier {
   /// Ciclo de vida del celular del menor.
   /// Pantalla apagada / ahorro ≠ cerró la app. Solo avisamos al cerrar de verdad.
   void onAppLifecycle(AppLifecycleState state) {
+    _inForeground = state == AppLifecycleState.resumed;
     if (!isLoggedIn || !hasFamily) return;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_onResumed());
+    }
     if (!isKid) return;
 
     if (state == AppLifecycleState.resumed) {
@@ -1082,6 +1182,17 @@ class AppController extends ChangeNotifier {
     if (state == AppLifecycleState.detached) {
       _kidBackgroundTimer?.cancel();
       unawaited(reportPresence(state: 'background', immediate: true));
+    }
+  }
+
+  Future<void> _onResumed() async {
+    try {
+      await refreshFamilyStatus();
+    } catch (_) {}
+    await syncRuntimeServices();
+    if (isKid) {
+      final sent = await flushPendingGeofenceEvents(api, store);
+      if (sent > 0) lastDetectionError = null;
     }
   }
 
@@ -1274,8 +1385,8 @@ class AppController extends ChangeNotifier {
       );
     } on ApiException catch (e) {
       // Carrera: quedó una salida abierta → cancelar y reintentar una vez.
-      final lower = e.message.toLowerCase();
-      if (!lower.contains('salida en curso')) rethrow;
+      // El hijo/a no puede replaceOpen; cierra la suya y vuelve a avisar.
+      if (!e.isTripAlreadyOpen) rethrow;
       try {
         final live = await api.activeTrip();
         final id = live['trip'] is Map ? (live['trip'] as Map)['id'] : null;
@@ -1291,42 +1402,131 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<String> _notificationsSince() async {
+    final saved = await store.notificationsSince;
+    if (saved != null && saved.isNotEmpty) return saved;
+    return DateTime.now()
+        .toUtc()
+        .subtract(const Duration(hours: 36))
+        .toIso8601String();
+  }
+
+  Future<void> _advanceNotificationCursor() async {
+    final shown = await store.shownAlertIds();
+    final next = nextNotificationsSince(
+      notifications: notifications,
+      shownIds: shown,
+    );
+    if (next != null) await store.setNotificationsSince(next);
+  }
+
   Future<Map<String, dynamic>> startTrip({
     String? kidId,
     String? destinationPlaceId,
     String? expectedReturnAt,
     String? kind,
     bool? forceNotify,
+    bool replaceOpen = false,
   }) async {
-    final createdById = user?['id'] as String?;
-    final createdByName = displayName;
-    final data = await api.startTrip(
+    final key = newIdempotencyKey();
+    try {
+      final data = await api.startTrip(
+        kidId: kidId,
+        destinationPlaceId: destinationPlaceId,
+        expectedReturnAt: expectedReturnAt,
+        kind: kind,
+        forceNotify: forceNotify,
+        createdById: user?['id'] as String?,
+        createdByName: displayName,
+        idempotencyKey: key,
+        replaceOpen: replaceOpen,
+      );
+      await _rememberTripCreator(data, kidId: kidId);
+      await refreshFamilyStatus();
+      return data;
+    } on ApiException catch (e) {
+      Map<String, dynamic>? live;
+      if (e.isTripAlreadyOpen || isSoftNetworkFailure(e)) {
+        try {
+          live = tripFromApiBody(await api.activeTrip(kidId: kidId));
+        } catch (_) {}
+        live = openTripFromBody(e.body) ?? live;
+      }
+      if (sameDestination(live, destinationPlaceId)) {
+        final recovered = {'trip': live, 'recovered': true};
+        await _rememberTripCreator(recovered, kidId: kidId);
+        await refreshFamilyStatus();
+        return recovered;
+      }
+      if (e.isTripAlreadyOpen) {
+        throw TripAlreadyOpenException(
+          e.message.trim().isEmpty ? 'Ya hay una salida en curso' : e.message,
+          statusCode: e.statusCode,
+          code: e.code,
+          body: e.body,
+          trip: live,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// El adulto reenvía POST /trips con replaceOpen (clave nueva: el cuerpo cambia).
+  /// El hijo/a no puede reemplazar: cierra la suya y crea otra.
+  Future<Map<String, dynamic>> replaceOpenTrip({
+    String? openTripId,
+    String? kidId,
+    String? destinationPlaceId,
+    String? expectedReturnAt,
+    String? kind,
+    bool? forceNotify,
+  }) async {
+    if (isAdult) {
+      return startTrip(
+        kidId: kidId,
+        destinationPlaceId: destinationPlaceId,
+        expectedReturnAt: expectedReturnAt,
+        kind: kind,
+        forceNotify: forceNotify,
+        replaceOpen: true,
+      );
+    }
+    if (openTripId == null || openTripId.isEmpty) {
+      throw ApiException(
+        'No encontramos la salida abierta para cerrarla.',
+      );
+    }
+    await api.patchTrip(openTripId, action: 'cancel');
+    if (activeTrip?['id'] == openTripId) activeTrip = null;
+    return startTrip(
       kidId: kidId,
       destinationPlaceId: destinationPlaceId,
       expectedReturnAt: expectedReturnAt,
       kind: kind,
       forceNotify: forceNotify,
+    );
+  }
+
+  Future<void> _rememberTripCreator(
+    Map<String, dynamic> data, {
+    String? kidId,
+  }) async {
+    final createdById = user?['id'] as String?;
+    final createdByName = displayName;
+    final tripRaw = data['trip'];
+    if (tripRaw is! Map || createdById == null) return;
+    final trip = Map<String, dynamic>.from(tripRaw);
+    trip['createdById'] ??= createdById;
+    trip['createdByName'] ??= createdByName;
+    data['trip'] = trip;
+    final tripId = trip['id'] as String?;
+    if (tripId == null || tripId.isEmpty) return;
+    await store.saveTripCreator(
+      tripId: tripId,
       createdById: createdById,
       createdByName: createdByName,
+      kidId: kidId ?? (isKid ? (user?['id'] as String?) : null),
     );
-    final tripRaw = data['trip'];
-    if (tripRaw is Map && createdById != null) {
-      final trip = Map<String, dynamic>.from(tripRaw);
-      trip['createdById'] ??= createdById;
-      trip['createdByName'] ??= createdByName;
-      data['trip'] = trip;
-      final tripId = trip['id'] as String?;
-      if (tripId != null && tripId.isNotEmpty) {
-        await store.saveTripCreator(
-          tripId: tripId,
-          createdById: createdById,
-          createdByName: createdByName,
-          kidId: kidId ?? (isKid ? (user?['id'] as String?) : null),
-        );
-      }
-    }
-    await refreshFamilyStatus();
-    return data;
   }
 
   Future<Map<String, dynamic>> arriveTrip(String tripId) async {
@@ -1365,8 +1565,8 @@ class AppController extends ChangeNotifier {
     permissionsReady = false;
     sessionValidationFailed = false;
     sessionValidationMessage = null;
-    _seenNotificationIds.clear();
-    _alertsPrimed = false;
+    lastDetectionError = null;
+    taskDetectionRunning = false;
     await store.clearSession();
     notifyListeners();
   }

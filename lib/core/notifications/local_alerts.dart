@@ -122,10 +122,11 @@ class LocalAlerts {
     bool urgent = false,
     DateTime? eventTime,
     String? payload,
+    String? idKey,
   }) async {
     await init();
     await _plugin.show(
-      id: _id++,
+      id: idKey == null ? _id++ : notificationIdFor(idKey),
       title: title,
       body: body,
       payload: payload,
@@ -184,6 +185,13 @@ class LocalAlerts {
       await HapticFeedback.heavyImpact();
       await Future<void>.delayed(const Duration(milliseconds: 280));
     }
+  }
+
+  /// Id estable: si el aviso se muestra dos veces (pantalla y servicio),
+  /// Android reemplaza la misma notificación en vez de duplicarla.
+  static int notificationIdFor(String key) {
+    final hash = key.hashCode & 0x7fffffff;
+    return 1000 + (hash % 1000000);
   }
 
   /// Aviso fijo silencioso: permite seguir recibiendo avisos sin Firebase.

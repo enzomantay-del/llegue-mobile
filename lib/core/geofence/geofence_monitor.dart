@@ -98,8 +98,8 @@ class GeofenceMonitor {
 
   final Duration enterGrace;
   final Duration exitGrace;
-  final void Function(GeofenceTransition transition)? onTransition;
-  final void Function(String status)? onStatus;
+  void Function(GeofenceTransition transition)? onTransition;
+  void Function(String status)? onStatus;
 
   StreamSubscription<Position>? _sub;
   List<Map<String, dynamic>> _places = [];
@@ -130,7 +130,7 @@ class GeofenceMonitor {
           if (p['id'] is String) p['id'] as String,
       ];
 
-  Future<void> start() async {
+  Future<void> start({bool foregroundNotification = true}) async {
     if (kIsWeb) return;
     await stop();
     lastError = null;
@@ -160,12 +160,15 @@ class GeofenceMonitor {
         accuracy: LocationAccuracy.high,
         distanceFilter: 10,
         intervalDuration: const Duration(seconds: 10),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Llegué activo',
-          notificationText: 'Detectando llegadas y salidas',
-          enableWakeLock: true,
-          setOngoing: true,
-        ),
+        // Si ya hay un servicio en primer plano de tipo location, no abrimos otro.
+        foregroundNotificationConfig: foregroundNotification
+            ? const ForegroundNotificationConfig(
+                notificationTitle: 'Llegué activo',
+                notificationText: 'Detectando llegadas y salidas',
+                enableWakeLock: true,
+                setOngoing: true,
+              )
+            : null,
       );
     } else {
       settings = const LocationSettings(
@@ -178,9 +181,15 @@ class GeofenceMonitor {
       _sub = Geolocator.getPositionStream(locationSettings: settings).listen(
         _onPosition,
         onError: (Object e) {
+          running = false;
           lastError = 'Error de ubicación';
-          onStatus?.call('Error de ubicación');
+          onStatus?.call('Detección apagada');
           debugPrint('GeofenceMonitor error: $e');
+        },
+        onDone: () {
+          running = false;
+          lastError ??= 'Detección apagada';
+          onStatus?.call('Detección apagada');
         },
       );
       running = true;
@@ -190,6 +199,28 @@ class GeofenceMonitor {
       onStatus?.call('No se pudo iniciar la detección');
       debugPrint('GeofenceMonitor start failed: $e');
     }
+  }
+
+  /// Para pruebas: simula un fix sin pedir GPS.
+  void debugFeedPosition({
+    required double latitude,
+    required double longitude,
+    DateTime? at,
+  }) {
+    _onPosition(
+      Position(
+        latitude: latitude,
+        longitude: longitude,
+        timestamp: at ?? DateTime.now(),
+        accuracy: 5,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      ),
+    );
   }
 
   Future<void> stop() async {

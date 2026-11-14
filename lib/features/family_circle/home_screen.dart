@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_client.dart';
 import '../../core/copy/outing_copy.dart';
 import '../../core/state/app_controller.dart';
+import '../../core/trips/trip_conflict.dart';
+import '../onboarding/keep_alive_onboarding_screen.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/brand_mark.dart';
 import '../places/places_screen.dart';
@@ -52,7 +54,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
-  Future<void> _run(Future<void> Function() action, {String? okMsg}) async {
+  Future<void> _run(
+    Future<void> Function() action, {
+    String? okMsg,
+    bool failInDialog = false,
+  }) async {
     setState(() => _busy = true);
     try {
       await action();
@@ -62,12 +68,20 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      if (failInDialog) {
+        await _showTripFailed(e.message);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo completar. Probá de nuevo.')),
-      );
+      if (failInDialog) {
+        await _showTripFailed('No se pudo completar. Probá de nuevo.');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se pudo completar. Probá de nuevo.')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -447,15 +461,125 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    await _run(
-      () async {
-        await app.startTrip(
-          kidId: forKidId,
-          destinationPlaceId: placeId,
+    await _createSpecialOuting(
+      kidId: forKidId,
+      destinationPlaceId: placeId!,
+    );
+  }
+
+  Future<void> _createSpecialOuting({
+    required String? kidId,
+    required String destinationPlaceId,
+  }) async {
+    final app = context.read<AppController>();
+    final userId = app.user?['id'];
+    final resolvedKid = kidId ?? (app.isKid && userId is String ? userId : null);
+    final existing = app.tripForKid(resolvedKid);
+    if (existing != null) {
+      if (sameDestination(existing, destinationPlaceId)) {
+        await _showTripFailed('Esa salida ya está armada.');
+        return;
+      }
+      final replace = await _confirmReplaceTrip(existing);
+      if (!replace || !mounted) return;
+      final openId = existing['id'];
+      if (openId is! String || openId.isEmpty) {
+        await _showTripFailed('No encontramos la salida abierta para cerrarla.');
+        return;
+      }
+      await _run(
+        () => app.replaceOpenTrip(
+          openTripId: openId,
+          kidId: kidId,
+          destinationPlaceId: destinationPlaceId,
+          forceNotify: false,
+        ),
+        okMsg: 'Salida armada',
+        failInDialog: true,
+      );
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await app.startTrip(
+        kidId: kidId,
+        destinationPlaceId: destinationPlaceId,
+        forceNotify: false,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Salida armada')),
+      );
+    } on TripAlreadyOpenException catch (e) {
+      if (!mounted) return;
+      final replace = await _confirmReplaceTrip(e.trip);
+      if (!replace || !mounted) return;
+      final openId = e.trip?['id'];
+      if (openId is! String || openId.isEmpty) {
+        await _showTripFailed(tripAlreadyOpenBody(e.trip));
+        return;
+      }
+      try {
+        await app.replaceOpenTrip(
+          openTripId: openId,
+          kidId: kidId,
+          destinationPlaceId: destinationPlaceId,
           forceNotify: false,
         );
-      },
-      okMsg: 'Salida armada',
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Salida armada')),
+        );
+      } on ApiException catch (err) {
+        await _showTripFailed(err.message);
+      } catch (_) {
+        await _showTripFailed('No se pudo completar. Probá de nuevo.');
+      }
+    } on ApiException catch (e) {
+      await _showTripFailed(e.message);
+    } catch (_) {
+      await _showTripFailed('No se pudo completar. Probá de nuevo.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<bool> _confirmReplaceTrip(Map<String, dynamic>? trip) async {
+    final replace = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ya hay una salida en curso'),
+        content: Text(tripAlreadyOpenBody(trip)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Dejar la actual'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cerrar y avisar esta'),
+          ),
+        ],
+      ),
+    );
+    return replace == true;
+  }
+
+  Future<void> _showTripFailed(String message) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(tripCreateFailedTitle),
+        content: Text(tripCreateFailedBody(message)),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -875,6 +999,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
       ],
+      if (app.batteryUnrestricted == false) ...[
+        const SizedBox(height: 14),
+        _KeepAliveHint(
+          text:
+              'Android puede frenar los avisos. Sacá a Llegué de la batería y apagá "Pausar actividad".',
+        ),
+      ],
       const SizedBox(height: 22),
       _HomeShortcutsRow(
         onPlaces: () => Navigator.of(context).pushNamed(PlacesScreen.route),
@@ -1052,7 +1183,9 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 1.4,
         ),
       ),
-      const SizedBox(height: 28),
+      const SizedBox(height: 14),
+      _DetectionStatusCard(app: app),
+      const SizedBox(height: 18),
       _PrimaryButton(
         icon: Icons.home_rounded,
         label: 'Regreso a casa',
@@ -1190,6 +1323,121 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     ];
+  }
+}
+
+class _DetectionStatusCard extends StatelessWidget {
+  const _DetectionStatusCard({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) {
+    final off = app.showDetectionOff;
+    final on = app.detectionRunning;
+    final error = app.lastDetectionError;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      decoration: BoxDecoration(
+        color: off ? const Color(0xCC7A2E12) : Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: off ? Colors.white38 : Colors.white24,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            app.detectionBannerTitle,
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            off
+                ? 'Tu familia no se entera si llegás o salís.'
+                : (on
+                      ? 'Estamos avisando llegadas y salidas.'
+                      : 'Estamos prendiendo la detección.'),
+            style: GoogleFonts.dmSans(
+              color: Colors.white.withValues(alpha: 0.9),
+              fontSize: 14,
+              height: 1.35,
+            ),
+          ),
+          if (error != null && error.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              error,
+              style: GoogleFonts.dmSans(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                height: 1.35,
+              ),
+            ),
+          ],
+          if (off || app.batteryUnrestricted == false) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (off)
+                  TextButton(
+                    onPressed: () {
+                      context.read<AppController>().restartDetection();
+                    },
+                    style: TextButton.styleFrom(foregroundColor: Colors.white),
+                    child: const Text('Reactivar'),
+                  ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pushNamed(
+                      KeepAliveOnboardingScreen.route,
+                      arguments: true,
+                    );
+                  },
+                  style: TextButton.styleFrom(foregroundColor: Colors.white),
+                  child: const Text('Revisar batería'),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _KeepAliveHint extends StatelessWidget {
+  const _KeepAliveHint({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xCC7A4E12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.dmSans(
+          color: Colors.white,
+          fontSize: 14,
+          height: 1.35,
+        ),
+      ),
+    );
   }
 }
 

@@ -11,7 +11,7 @@ class RecordingGeofence extends GeofenceMonitor {
   int starts = 0;
 
   @override
-  Future<void> start() async {
+  Future<void> start({bool foregroundNotification = true}) async {
     starts++;
     running = true;
   }

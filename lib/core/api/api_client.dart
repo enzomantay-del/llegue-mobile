@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiException implements Exception {
@@ -16,6 +17,20 @@ class ApiException implements Exception {
   bool get isDeviceBound => code == 'device_bound';
   bool get isPhoneOwner => code == 'phone_owner';
 
+  /// El servidor rechaza un viaje nuevo mientras hay uno abierto.
+  bool get isTripAlreadyOpen {
+    final c = code;
+    if (c == 'trip_in_progress' ||
+        c == 'trip_open' ||
+        c == 'trip_already_open' ||
+        c == 'active_trip') {
+      return true;
+    }
+    final lower = message.toLowerCase();
+    return lower.contains('salida en curso') ||
+        lower.contains('ya hay una salida');
+  }
+
   String? get boundUserName {
     final user = body?['boundUser'];
     if (user is Map && user['name'] is String) return user['name'] as String;
@@ -24,6 +39,18 @@ class ApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class TripAlreadyOpenException extends ApiException {
+  TripAlreadyOpenException(
+    super.message, {
+    super.statusCode,
+    super.code,
+    super.body,
+    this.trip,
+  });
+
+  final Map<String, dynamic>? trip;
 }
 
 class ApiClient {
@@ -45,6 +72,14 @@ class ApiClient {
   )?
   onTokensRefreshed;
 
+  /// Solo pruebas: reemplaza el POST para ver reintentos e Idempotency-Key.
+  @visibleForTesting
+  Future<http.Response> Function(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+  })? debugPost;
+
   Future<Map<String, dynamic>>? _refreshing;
 
   Uri _u(String path) {
@@ -52,12 +87,25 @@ class ApiClient {
     return Uri.parse('$base$path');
   }
 
-  Map<String, String> _headers({bool auth = false}) {
+  Map<String, String> _headers({bool auth = false, String? idempotencyKey}) {
     final h = <String, String>{'content-type': 'application/json'};
     if (auth && accessToken != null) {
       h['authorization'] = 'Bearer $accessToken';
     }
+    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
+      h['Idempotency-Key'] = idempotencyKey;
+    }
     return h;
+  }
+
+  Future<http.Response> _post(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+  }) {
+    final hook = debugPost;
+    if (hook != null) return hook(uri, headers: headers, body: body);
+    return http.post(uri, headers: headers, body: body);
   }
 
   /// Hasta 2 intentos. Render Free puede tardar ~1 min al despertar.
@@ -534,9 +582,13 @@ class ApiClient {
     return _json(res);
   }
 
-  Future<Map<String, dynamic>> familyStatus() async {
+  Future<Map<String, dynamic>> familyStatus({String? notificationsSince}) async {
+    final since = notificationsSince?.trim();
+    final q = since == null || since.isEmpty
+        ? ''
+        : '?notificationsSince=${Uri.encodeQueryComponent(since)}';
     final res = await _sendAuth(
-      () => http.get(_u('/family/status'), headers: _headers(auth: true)),
+      () => http.get(_u('/family/status$q'), headers: _headers(auth: true)),
     );
     return _json(res);
   }
@@ -732,24 +784,51 @@ class ApiClient {
     bool? forceNotify,
     String? createdById,
     String? createdByName,
+    String? idempotencyKey,
+    bool replaceOpen = false,
   }) async {
-    final res = await _sendAuth(
-      () => http.post(
-        _u('/trips'),
-        headers: _headers(auth: true),
-        body: jsonEncode({
-          if (kidId != null) 'kidId': kidId,
-          if (destinationPlaceId != null)
-            'destinationPlaceId': destinationPlaceId,
-          if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
-          if (kind != null) 'kind': kind,
-          if (forceNotify != null) 'forceNotify': forceNotify,
-          if (createdById != null) 'createdById': createdById,
-          if (createdByName != null) 'createdByName': createdByName,
-        }),
-      ),
-    );
-    return _json(res);
+    final key = (idempotencyKey == null || idempotencyKey.isEmpty)
+        ? _newIdempotencyKey()
+        : idempotencyKey;
+    final body = jsonEncode({
+      if (kidId != null) 'kidId': kidId,
+      if (destinationPlaceId != null) 'destinationPlaceId': destinationPlaceId,
+      if (expectedReturnAt != null) 'expectedReturnAt': expectedReturnAt,
+      if (kind != null) 'kind': kind,
+      if (forceNotify != null) 'forceNotify': forceNotify,
+      if (createdById != null) 'createdById': createdById,
+      if (createdByName != null) 'createdByName': createdByName,
+      if (replaceOpen) 'replaceOpen': true,
+    });
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final res = await _sendAuth(
+        () => _post(
+          _u('/trips'),
+          headers: _headers(auth: true, idempotencyKey: key),
+          body: body,
+        ),
+      );
+      if (res.statusCode == 409 && attempt == 0 && _isIdempotencyInProgress(res)) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        continue;
+      }
+      return _json(res);
+    }
+    throw ApiException('Estamos registrando esa salida. Probá de nuevo en un momento.');
+  }
+
+  bool _isIdempotencyInProgress(http.Response res) {
+    try {
+      final decoded = jsonDecode(res.body);
+      return decoded is Map && decoded['code'] == 'idempotency_in_progress';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _newIdempotencyKey() {
+    final us = DateTime.now().microsecondsSinceEpoch;
+    return 'trip-$us-${us % 999983}';
   }
 
   Future<Map<String, dynamic>> patchTrip(
@@ -783,8 +862,10 @@ class ApiClient {
     Map<String, dynamic>? payload,
     bool? forceNotify,
   }) async {
+    // 401 es sesión vencida: _sendAuth refresca y reintenta el mismo evento.
+    // Si sigue fallando, el que llama lo guarda y no lo tira.
     final res = await _sendAuth(
-      () => http.post(
+      () => _post(
         _u('/events'),
         headers: _headers(auth: true),
         body: jsonEncode({
@@ -808,9 +889,16 @@ class ApiClient {
     return _json(res);
   }
 
-  Future<Map<String, dynamic>> listMyNotifications() async {
+  Future<Map<String, dynamic>> listMyNotifications({String? since}) async {
+    final raw = since?.trim();
+    final q = raw == null || raw.isEmpty
+        ? ''
+        : '?since=${Uri.encodeQueryComponent(raw)}';
     final res = await _sendAuth(
-      () => http.get(_u('/notifications/me'), headers: _headers(auth: true)),
+      () => http.get(
+        _u('/notifications/me$q'),
+        headers: _headers(auth: true),
+      ),
     );
     return _json(res);
   }
