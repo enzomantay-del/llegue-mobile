@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:provider/provider.dart';
 
 import 'core/invite_links.dart';
@@ -32,6 +33,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterForegroundTask.initCommunicationPort();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -132,6 +134,7 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    FlutterForegroundTask.addTaskDataCallback(_onKeepAliveData);
     widget.controller.addListener(_onController);
     widget.controller.alerts.onSelected = _onNotificationPayload;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -150,6 +153,10 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
         );
       });
     } catch (_) {}
+  }
+
+  void _onKeepAliveData(Object data) {
+    widget.controller.onKeepAliveMessage(data);
   }
 
   void _onController() {
@@ -179,6 +186,7 @@ class _LlegueAppState extends State<LlegueApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    FlutterForegroundTask.removeTaskDataCallback(_onKeepAliveData);
     widget.controller.removeListener(_onController);
     if (widget.controller.alerts.onSelected == _onNotificationPayload) {
       widget.controller.alerts.onSelected = null;

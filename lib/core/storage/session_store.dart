@@ -20,8 +20,15 @@ class SessionStore {
   static const _boundPhoneKey = 'bound_user_phone';
   static const _setupDoneKey = 'setup_checklist_done';
   static const _termsAcceptedKey = 'terms_accepted_v1';
-  static const _keepAliveSeenKey = 'keep_alive_onboarding_seen_v1';
+  /// v2: la guía ahora incluye batería, hibernación y autostart.
+  /// Quien ya vio la v1 vuelve a verla una vez.
+  static const _keepAliveSeenKey = 'keep_alive_onboarding_seen_v2';
   static const _tripCreatorsKey = 'trip_creators_v1';
+  static const _shownAlertsKey = 'shown_alert_ids_v1';
+  static const _alertBaselineKey = 'alert_baseline_v1';
+  static const _inflightAlertsKey = 'inflight_alert_ids_v1';
+  static const _pendingEventsKey = 'pending_geofence_events_v1';
+  static const _notificationsSinceKey = 'notifications_since_v1';
 
   Future<SharedPreferences> get _p async => SharedPreferences.getInstance();
 
@@ -176,6 +183,118 @@ class SessionStore {
   Future<bool> get keepAliveOnboardingSeen async =>
       (await _p).getBool(_keepAliveSeenKey) ?? false;
 
+  Future<String?> get notificationsSince async {
+    final p = await _p;
+    await p.reload();
+    return p.getString(_notificationsSinceKey);
+  }
+
+  Future<void> setNotificationsSince(String iso) async {
+    await (await _p).setString(_notificationsSinceKey, iso);
+  }
+
+  Future<Set<String>> shownAlertIds() async {
+    final p = await _p;
+    await p.reload();
+    return (p.getStringList(_shownAlertsKey) ?? const <String>[]).toSet();
+  }
+
+  Future<bool> hasAlertBaseline() async {
+    final p = await _p;
+    await p.reload();
+    return p.getBool(_alertBaselineKey) ?? false;
+  }
+
+  Future<void> setAlertBaseline() async {
+    await (await _p).setBool(_alertBaselineKey, true);
+  }
+
+  Future<void> markAlertShown(String id) => markAlertsShown([id]);
+
+  Future<void> markAlertsShown(Iterable<String> ids) async {
+    final incoming = ids.where((id) => id.isNotEmpty).toList();
+    if (incoming.isEmpty) return;
+    final p = await _p;
+    await p.reload();
+    final shown = (p.getStringList(_shownAlertsKey) ?? <String>[]).toList();
+    for (final id in incoming) {
+      if (!shown.contains(id)) shown.add(id);
+    }
+    final trimmed = shown.length > 400
+        ? shown.sublist(shown.length - 400)
+        : shown;
+    await p.setStringList(_shownAlertsKey, trimmed);
+    await _dropInflight(p, incoming.toSet());
+  }
+
+  /// Reserva el id unos segundos para que la pantalla y el servicio
+  /// no muestren el mismo aviso a la vez. No lo marca como visto.
+  Future<bool> tryClaimAlert(
+    String id, {
+    Duration hold = const Duration(seconds: 20),
+  }) async {
+    if (id.isEmpty) return false;
+    final p = await _p;
+    await p.reload();
+    final shown = p.getStringList(_shownAlertsKey) ?? const <String>[];
+    if (shown.contains(id)) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final inflight = _readInflight(p, now);
+    if (inflight.containsKey(id)) return false;
+    inflight[id] = now + hold.inMilliseconds;
+    await p.setStringList(_inflightAlertsKey, _inflightRows(inflight));
+    return true;
+  }
+
+  Map<String, int> _readInflight(SharedPreferences p, int nowMs) {
+    final raw = p.getStringList(_inflightAlertsKey) ?? const <String>[];
+    final out = <String, int>{};
+    for (final row in raw) {
+      final split = row.lastIndexOf('|');
+      if (split <= 0) continue;
+      final id = row.substring(0, split);
+      final exp = int.tryParse(row.substring(split + 1)) ?? 0;
+      if (id.isNotEmpty && exp > nowMs) out[id] = exp;
+    }
+    return out;
+  }
+
+  List<String> _inflightRows(Map<String, int> inflight) => [
+        for (final entry in inflight.entries) '${entry.key}|${entry.value}',
+      ];
+
+  Future<void> _dropInflight(SharedPreferences p, Set<String> ids) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final inflight = _readInflight(p, now);
+    inflight.removeWhere((id, _) => ids.contains(id));
+    await p.setStringList(_inflightAlertsKey, _inflightRows(inflight));
+  }
+
+  Future<List<Map<String, dynamic>>> pendingGeofenceEvents() async {
+    final p = await _p;
+    await p.reload();
+    return _decodeMapList(p.getString(_pendingEventsKey));
+  }
+
+  Future<void> enqueuePendingGeofenceEvent(Map<String, dynamic> event) async {
+    final all = await pendingGeofenceEvents();
+    final key = _pendingEventKey(event);
+    if (all.any((item) => _pendingEventKey(item) == key)) return;
+    all.add(event);
+    final trimmed = all.length > 30 ? all.sublist(all.length - 30) : all;
+    await (await _p).setString(_pendingEventsKey, jsonEncode(trimmed));
+  }
+
+  Future<void> removePendingGeofenceEvent(Map<String, dynamic> event) async {
+    final key = _pendingEventKey(event);
+    final all = await pendingGeofenceEvents();
+    all.removeWhere((item) => _pendingEventKey(item) == key);
+    await (await _p).setString(_pendingEventsKey, jsonEncode(all));
+  }
+
+  String _pendingEventKey(Map<String, dynamic> event) =>
+      '${event['type']}|${event['placeId']}|${event['createdAtMs']}';
+
   /// Cierra sesión pero NO borra la identidad del celular (un celular = una persona).
   Future<void> clearSession() async {
     final p = await _p;
@@ -191,7 +310,10 @@ class SessionStore {
     await p.remove(_pendingInviteKey);
     await p.remove(_setupDoneKey);
     await p.remove(_tripCreatorsKey);
-    // device_id, bound_*, termsAccepted y keepAliveOnboardingSeen se conservan
+    await p.remove(_pendingEventsKey);
+    await p.remove(_notificationsSinceKey);
+    // device_id, bound_*, termsAccepted, avisos ya mostrados y
+    // keepAliveOnboardingSeen se conservan
   }
 
   /// Borra identidad local (como app recién instalada). Conserva URL del servidor.

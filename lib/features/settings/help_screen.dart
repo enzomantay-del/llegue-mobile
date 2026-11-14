@@ -38,8 +38,10 @@ class HelpScreen extends StatelessWidget {
     ),
     (
       '¿Por qué no me llegan avisos?',
-      'Revisá en Cuenta → Qué avisos quiero recibir. También comprobá '
-          'notificaciones del sistema y que el celular del hijo/a tenga ubicación activa.',
+      'En el celular del adulto dejá el aviso fijo de Llegué. '
+          'En el del hijo/a, la detección tiene que decir activa. '
+          'Sacala de la batería, apagá "Pausar actividad" y, en Xiaomi, '
+          'activá el inicio automático. Cuenta → Para que no se apague.',
     ),
     (
       '¿Puedo usar Llegué en iPhone?',

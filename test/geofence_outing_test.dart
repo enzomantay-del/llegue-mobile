@@ -153,9 +153,13 @@ void main() {
   test('POST de llegada/salida de geofence manda tripId y placeId', () {
     final src =
         File('lib/core/state/app_controller.dart').readAsStringSync();
+    final events =
+        File('lib/core/geofence/geofence_events.dart').readAsStringSync();
     expect(src.contains('placesForKidGeofence('), isTrue);
+    expect(src.contains('postGeofenceTransition('), isTrue);
     expect(src.contains('tripId: tripId'), isTrue);
-    expect(src.contains("placeId: t.placeId"), isTrue);
+    expect(events.contains('placeId: transition.placeId'), isTrue);
+    expect(events.contains('tripId: tripId'), isTrue);
     expect(src.contains('_syncGeofencePlaces()'), isTrue);
     expect(src.contains('extraPlaces: pendingPlaces'), isTrue);
   });

@@ -43,7 +43,7 @@ class FakeApiClient extends ApiClient {
   }
 
   @override
-  Future<Map<String, dynamic>> familyStatus() async {
+  Future<Map<String, dynamic>> familyStatus({String? notificationsSince}) async {
     familyCalls++;
     final err = familyError;
     if (err != null) throw err;

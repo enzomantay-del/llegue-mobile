@@ -8,6 +8,7 @@ import '../../core/state/app_controller.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_background.dart';
 import '../legal/terms_screen.dart';
+import '../onboarding/keep_alive_onboarding_screen.dart';
 import '../onboarding/switch_person_dialog.dart';
 import '../onboarding/welcome_screen.dart';
 import 'alert_prefs_screen.dart';
@@ -179,6 +180,15 @@ class _SettingsHubScreenState extends State<SettingsHubScreen> {
                   onTap: () =>
                       Navigator.of(context).pushNamed(AlertPrefsScreen.route),
                 ),
+              _HubTile(
+                icon: Icons.battery_saver_rounded,
+                title: 'Para que no se apague',
+                subtitle: 'Batería, pausar actividad e inicio automático',
+                onTap: () => Navigator.of(context).pushNamed(
+                  KeepAliveOnboardingScreen.route,
+                  arguments: true,
+                ),
+              ),
               _HubTile(
                 icon: Icons.help_outline_rounded,
                 title: 'Ayuda',
